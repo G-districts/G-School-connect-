@@ -1,0 +1,23 @@
+<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login · G School</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>body{max-width:900px;margin:auto;padding:2rem} body, label, h3, h4, .mini, button, .btn { color:#000 !important; }</style>
+</head><body>
+<h2>G School Connect</h2>
+<article>
+  <label>Email <input id="email" type="email" placeholder="you@example.com"></label>
+  <label>Password <input id="password" type="password" placeholder="••••••••"></label>
+  <button id="go">Login</button>
+  <p id="msg" style="color:crimson"></p>
+</article>
+<script>
+document.getElementById('go').onclick = async ()=>{
+  const email=document.getElementById('email').value.trim();
+  const password=document.getElementById('password').value;
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+  if(r.ok){ const j=await r.json(); location.href = j.role==='admin'?'/admin':'/teacher'; }
+  else document.getElementById('msg').textContent='Invalid credentials';
+};
+</script>
+</body></html>

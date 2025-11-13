@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teacher Present</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#f6f8fb;margin:0;color:#0b1b34}
+    .wrap{max-width:900px;margin:40px auto;padding:20px;background:#fff;border:1px solid #e6e9ef;border-radius:14px;box-shadow:0 6px 16px rgba(0,0,0,.06)}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .btn{padding:10px 14px;border-radius:10px;border:1px solid #d0d7e2;background:#0b57d0;color:#fff;cursor:pointer;font-weight:600}
+    .btn.secondary{background:#fff;color:#0b1b34}
+    .muted{color:#667085}
+    video{width:100%;max-height:60vh;background:#0b1b34;border-radius:12px}
+    code{background:#f2f4f8;padding:2px 6px;border-radius:6px}
+    .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #e6e9ef;border-radius:999px}
+    .dot{width:10px;height:10px;border-radius:50%}
+    .dot.green{background:#10b981}.dot.red{background:#ef4444}.dot.gray{background:#9ca3af}
+    .pill{background:#eef2ff;color:#1e3a8a;padding:4px 8px;border-radius:999px;font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Teacher Presentation</h2>
+    <p class="muted">Share your screen so students can watch from the extension webpage.</p>
+    <div class="row" style="margin:10px 0 16px">
+      <button id="start" class="btn">Start Presenting</button>
+      <button id="stop" class="btn secondary">Stop</button>
+      <span class="badge"><span id="dot" class="dot gray"></span><span id="status">Idle</span></span>
+    </div>
+
+    <video id="preview" autoplay muted playsinline></video>
+
+    <h3>Share Link</h3>
+    <p>Give students this link (or tell them to click “View Presentation” in the extension):</p>
+    <p><code id="share"></code> <span class="pill">Room: {{ room }}</span></p>
+  </div>
+
+<script>
+const room = "{{ room }}";
+const base = window.location.origin;
+document.getElementById('share').textContent = base + "/present/" + room;
+
+const dot = document.getElementById('dot');
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const videoEl = document.getElementById('preview');
+
+let screenStream = null;
+let connections = {}; // client_id -> RTCPeerConnection
+let pollTimer = null;
+let active = false;
+
+const ICE = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
+
+function setStatus(txt, color){
+  statusEl.textContent = txt;
+  dot.className = "dot " + (color || "gray");
+}
+
+async function startPresent(){
+  try{
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    videoEl.srcObject = screenStream;
+    setStatus("Presenting", "green");
+    active = true;
+    await fetch(base + "/api/present/" + room + "/start", { method: "POST" });
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(checkOffers, 1500);
+    screenStream.getVideoTracks()[0].addEventListener("ended", stopPresent);
+  }catch(e){
+    console.error(e);
+    setStatus("Permission denied", "red");
+  }
+}
+
+async function stopPresent(){
+  active = false;
+  if (pollTimer) clearInterval(pollTimer);
+  try {await fetch(base + "/api/present/" + room + "/end", { method: "POST" });}catch(e){}
+  Object.values(connections).forEach(pc => pc.close());
+  connections = {};
+  if (screenStream){
+    screenStream.getTracks().forEach(t=>t.stop());
+    screenStream = null;
+  }
+  videoEl.srcObject = null;
+  setStatus("Stopped", "gray");
+}
+
+async function checkOffers(){
+  if (!active) return;
+  const res = await fetch(base + "/api/present/" + room + "/offers");
+  const data = await res.json();
+  const offers = data.offers || {};
+  for (const client_id in offers){
+    if (connections[client_id]) continue;
+    await answerOffer(client_id, offers[client_id]);
+  }
+}
+
+async function answerOffer(client_id, offerSdp){
+  const pc = new RTCPeerConnection(ICE);
+  connections[client_id] = pc;
+  // Send teacher ICE to viewer
+  pc.onicecandidate = async (ev) => {
+    if (ev.candidate){
+      await fetch(`${base}/api/present/${room}/candidate/teacher/${client_id}`, {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ candidates: [ev.candidate] })
+      });
+    }
+  };
+  // Add teacher screen tracks
+  if (screenStream){
+    screenStream.getTracks().forEach(t => pc.addTrack(t, screenStream));
+  }
+  await pc.setRemoteDescription(offerSdp);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await fetch(`${base}/api/present/${room}/answer/${client_id}`, {
+    method:"POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ sdp: pc.localDescription })
+  });
+  // Poll for viewer ICE
+  const icePoll = setInterval(async () => {
+    if (!active || pc.connectionState === 'closed') { clearInterval(icePoll); return; }
+    const r = await fetch(`${base}/api/present/${room}/candidate/teacher/${client_id}`);
+    const j = await r.json();
+    (j.candidates || []).forEach(async c => {
+      try { await pc.addIceCandidate(c); } catch (e){ console.warn(e); }
+    });
+  }, 1200);
+}
+
+startBtn.onclick = startPresent;
+stopBtn.onclick = stopPresent;
+</script>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js" crossorigin="anonymous"></script>
+<script>
+const ioNS = (() => { try { return io('/present', { transports: ['websocket','polling'] }); } catch(e){ return null; } })();
+if (ioNS){
+  ioNS.emit('join', { room });
+  const oldStart = startPresent;
+  const oldStop = stopPresent;
+  startPresent = async function(){
+    await oldStart();
+    try { ioNS.emit('present_start', { room }); } catch(e){}
+  };
+  stopPresent = async function(){
+    await oldStop();
+    try { ioNS.emit('present_end', { room }); } catch(e){}
+  };
+  ioNS.on('viewer:offer', async ({client_id, sdp}) => {
+    if (!active || !screenStream) return;
+    await answerOffer(client_id, sdp);
+  });
+  ioNS.on('ice:viewer', async ({client_id, candidate}) => {
+    const pc = connections[client_id];
+    if (pc && candidate){ try { await pc.addIceCandidate(candidate); } catch(e){} }
+  });
+}
+</script>
+</body>
+</html>

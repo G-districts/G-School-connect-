@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin · G School</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    body { max-width:1200px; margin:auto; padding:1rem }
+    body, label, h3, h4, .mini, button, .btn { color:#000 !important; }
+    table { width:100%; border-collapse:collapse; margin-top:10px }
+    th, td { border:1px solid #ccc; padding:6px; text-align:left }
+    td input[type="url"] { width:100% }
+  </style>
+</head>
+<body>
+<nav>
+  <ul><li><strong>Admin</strong></li></ul>
+  <ul><li><a href="/teacher">Teacher</a></li><li><a href="/logout">Logout</a></li></ul>
+</nav>
+
+<h3>Settings</h3>
+<article>
+  <label>Default Blocked Redirect URL 
+    <input id="blocked" type="url" value="{{ data.settings.blocked_redirect }}">
+  </label>
+  <label><input id="chat" type="checkbox" {{ 'checked' if data.settings.chat_enabled else '' }}> Enable Chat</label>
+  <label>Extension Passcode <input id="passcode" type="password" placeholder="admin1234"></label>
+  <button id="save">Save</button>
+  <small id="msg" style="margin-left:8px"></small>
+</article>
+
+<h3>Categories (AI-powered)</h3>
+<article>
+  <table>
+    <thead>
+      <tr><th>Category</th><th>Blocked?</th><th>Block Page</th><th>Save</th></tr>
+    </thead>
+    <tbody id="cats"></tbody>
+  </table>
+</article>
+
+<h3>Manual Overrides</h3>
+<article>
+  <details open>
+    <summary>Manage Global Allow/Block Lists</summary>
+    <label>Always Allow (one URL per line)
+      <textarea id="allowlist" rows="5"></textarea>
+    </label>
+    <label>Always Block (one URL per line)
+      <textarea id="blocklist" rows="5"></textarea>
+    </label>
+    <button id="saveLists">Save Overrides</button>
+    <small id="msg2" style="margin-left:8px"></small>
+  </details>
+</article>
+
+<script>
+// Load categories + overrides
+async function refresh(){
+  // categories from AI API
+  const res = await fetch('/api/ai/categories');
+  const j = await res.json();
+  const tbody = document.getElementById('cats');
+  tbody.innerHTML = '';
+  (j.categories||[]).forEach(c=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${c.name}</b></td>
+      <td><input type="checkbox" ${c.blocked?'checked':''} data-name="${c.name}" class="blk"></td>
+      <td><input type="url" value="${c.block_url||''}" data-name="${c.name}" class="bp"></td>
+      <td><button data-name="${c.name}" class="saveCat">Save</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // ✅ load global overrides
+  const o = await (await fetch('/api/overrides')).json();
+  document.getElementById('allowlist').value = (o.allowlist || []).join("\n");
+  document.getElementById('blocklist').value = (o.teacher_blocks || []).join("\n");
+}
+refresh();
+
+// Save global settings
+document.getElementById('save').onclick = async()=>{
+  const body = {
+    blocked_redirect: document.getElementById('blocked').value,
+    chat_enabled: document.getElementById('chat').checked,
+    passcode: document.getElementById('passcode').value
+  };
+  const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('msg').textContent = r.ok?'Saved':'Error';
+  setTimeout(()=>document.getElementById('msg').textContent='',1500);
+};
+
+// Save individual category
+document.addEventListener('click', async(e)=>{
+  if(e.target.classList.contains('saveCat')){
+    const name = e.target.dataset.name;
+    const blocked = document.querySelector('.blk[data-name="'+name+'"]').checked;
+    const block_url = document.querySelector('.bp[data-name="'+name+'"]').value;
+    const body = {name, blocked, block_url};
+    const r = await fetch('/api/ai/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    alert(r.ok ? 'Saved!' : 'Error saving category');
+    refresh();
+  }
+});
+
+// Save manual overrides
+document.getElementById('saveLists').onclick = async()=>{
+  const allowlist = document.getElementById('allowlist').value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const teacher_blocks = document.getElementById('blocklist').value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const body = {allowlist, teacher_blocks};
+  const r = await fetch('/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('msg2').textContent = r.ok?'Saved':'Error';
+  setTimeout(()=>document.getElementById('msg2').textContent='',1500);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>G School Connect · Features</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <style>.container{max-width:1100px;margin:24px auto}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.badge{font-size:.8rem;padding:2px 8px;border-radius:999px;background:#eee}.muted{color:#666;font-size:.9rem}</style>
+</head>
+<body>
+  <main class="container">
+    <nav>
+      <ul><li><strong>G School Connect</strong></li></ul>
+      <ul>
+        <li><a href="/teacher">Teacher</a></li>
+        <li><a href="/admin">Admin</a></li>
+      </ul>
+    </nav>
+
+    <h2>Features</h2>
+    <p class="muted">Toggle advanced controls. Changes apply to all connected students.</p>
+
+    <article class="grid-2">
+      <div class="card">
+        <h4>Filters</h4>
+        <label><input type="checkbox" id="explicit_image_filter"> Explicit Image Filter</label>
+        <label><input type="checkbox" id="youtube_filter"> YouTube Filter</label>
+        <details open>
+          <summary>YouTube Rules</summary>
+          <label>Blocked Channels
+            <input type="text" id="yt_channels" value="Sample Channel">
+          </label>
+          <label>Blocked Keywords
+            <input type="text" id="yt_keywords" value="prank, gaming">
+          </label>
+        </details>
+      </div>
+      <div class="card">
+        <h4>Beacons</h4>
+        <label><input type="checkbox" id="beacon_alerts"> Beacon Alerts</label>
+        <label>Beacon Keywords
+          <input type="text" id="beacon_keywords" value="test">
+        </label>
+      </div>
+      <div class="card">
+        <h4>Controls</h4>
+        <label><input type="checkbox" id="prevent_close_tabs"> Prevent Closing Tabs</label>
+        <label><input type="checkbox" id="doodle_block"> Block Google Doodles</label>
+      </div>
+      <div class="card">
+        <h4>Live Sessions</h4>
+        <label><input type="checkbox" id="video_call_active"> Video Call Active</label>
+        <label><input type="checkbox" id="presentation_active"> Presentation Active</label>
+        <label>Presentation URL
+          <input type="url" id="presentation_url" placeholder="https://...">
+        </label>
+      </div>
+    </article>
+
+    <button id="saveBtn">Save Changes</button>
+    <span id="status" class="badge" style="display:none">Saved</span>
+  </main>
+
+  <script>
+  async function getFeatures(){ const r = await fetch('/api/features'); return r.ok ? r.json() : {}; }
+  async function saveFeatures(patch){
+    await fetch('/api/features', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch)});
+  }
+  function qs(id){ return document.getElementById(id); }
+  function parseList(v){ return v.split(',').map(s=>s.trim()).filter(Boolean); }
+
+  (async function init(){
+    const f = await getFeatures();
+    const set = (id, val)=>{ const el=qs(id); if(!el) return; if(el.type==='checkbox') el.checked=!!val; else el.value = val||''; };
+    set('explicit_image_filter', f.explicit_image_filter);
+    set('youtube_filter', f.youtube_filter);
+    set('beacon_alerts', f.beacon_alerts);
+    set('prevent_close_tabs', f.prevent_close_tabs);
+    set('doodle_block', f.doodle_block);
+    set('video_call_active', f.video_call_active);
+    set('presentation_active', f.presentation_active);
+    set('presentation_url', f.presentation_url);
+    if(f.youtube_rules){
+      qs('yt_channels').value = (f.youtube_rules.blocked_channels||['Sample Channel']).join(', ');
+      qs('yt_keywords').value = (f.youtube_rules.blocked_keywords||['prank','gaming']).join(', ');
+    }
+    qs('beacon_keywords').value = (f.beacon_keywords||['test']).join(', ');
+  })();
+
+  qs('saveBtn').addEventListener('click', async ()=>{
+    const patch = {
+      explicit_image_filter: qs('explicit_image_filter').checked,
+      youtube_filter: qs('youtube_filter').checked,
+      beacon_alerts: qs('beacon_alerts').checked,
+      prevent_close_tabs: qs('prevent_close_tabs').checked,
+      doodle_block: qs('doodle_block').checked,
+      video_call_active: qs('video_call_active').checked,
+      presentation_active: qs('presentation_active').checked,
+      presentation_url: qs('presentation_url').value.trim(),
+      youtube_rules: {
+        blocked_channels: parseList(qs('yt_channels').value),
+        blocked_keywords: parseList(qs('yt_keywords').value),
+      },
+      beacon_keywords: parseList(qs('beacon_keywords').value)
+    };
+    await saveFeatures(patch);
+    const s = document.getElementById('status'); s.style.display='inline-block'; s.textContent='Saved'; setTimeout(()=>s.style.display='none', 1500);
+  });
+  </script>
+</body>
+</html>

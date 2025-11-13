@@ -1,0 +1,1503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Teacher · G School</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+<style>
+  :root{
+    --bg:#f6f8fb; --panel:#ffffff; --ink:#0b1b34; --muted:#667085; --brand:#0b57d0;
+    --border:#e6e9ef; --shadow:0 4px 14px rgba(0,0,0,.06);
+  }
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);}
+
+  /* ----- App shell ----- */
+  .app{display:grid;grid-template-columns:240px 1fr;min-height:100%}
+  .sidebar{
+    background:#101828; color:#e6edf7; padding:16px 12px; display:flex; flex-direction:column; gap:8px;
+  }
+  .nav-title{font-weight:800; letter-spacing:.4px; display:flex; align-items:center; gap:8px}
+  .nav-group{margin-top:12px; display:flex; flex-direction:column; gap:4px}
+  .nav-btn{
+    display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:8px; cursor:pointer;
+    color:#e6edf7; text-decoration:none;
+  }
+  .nav-btn:hover{background:rgba(255,255,255,.06)}
+  .nav-btn.active{background:#1d2939}
+
+  .main{padding:16px 18px 36px}
+  .topbar{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow);
+    display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:12px;
+  }
+  .push{margin-left:auto}
+  .btn{
+    background:var(--brand)!important; color:#fff!important; border:none; border-radius:8px; padding:8px 10px;
+    font-weight:600; cursor:pointer;
+  }
+  .btn.secondary{ background:#eef2f7!important; color:#0b1b34!important; border:1px solid var(--border) }
+  .toggle{display:flex; align-items:center; gap:8px}
+
+  /* ----- Tabs row (Screens/Timelines/Screenshots/Call Students) ----- */
+  .subtabs{display:flex; gap:8px; margin:10px 0 14px}
+  .chip{padding:6px 10px; border-radius:999px; border:1px solid var(--border); background:#fff; cursor:pointer}
+  .chip.active{border-color:var(--brand); color:var(--brand); font-weight:700}
+
+  /* ----- Student grid ----- */
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px;
+  }
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow);
+    padding:10px; display:flex; flex-direction:column; gap:8px;
+  }
+  .card.online{border-color:#bfd1ff}
+  .card.offline{border-color:#e6e9ef; opacity:.92}
+  .shot{width:100%; height:160px; object-fit:cover; border-radius:8px; border:1px solid #e6e6e6; background:#fafafa; cursor:pointer}
+  .row{display:flex; align-items:center; gap:8px}
+  .mini{font-size:12px; color:var(--muted)}
+  .pill{font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid var(--border); background:#f7f9fe}
+
+  /* ----- Scenes board (left Allowed / right Blocked) ----- */
+  .scenes-board{
+    display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px;
+  }
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow);
+    padding:14px; display:flex; flex-direction:column; gap:10px;
+  }
+  .panel h4{margin:0}
+  .scene-list{display:flex; flex-direction:column; gap:8px}
+  .scene-item{
+    border:1px solid var(--border); border-radius:10px; padding:10px; background:#fff; display:flex; align-items:center; gap:8px;
+  }
+  .scene-title{font-weight:700}
+  .menu{margin-left:auto; display:flex; gap:6px}
+  .menu .btn{padding:6px 8px}
+  .muted{color:var(--muted); font-size:13px}
+
+  /* ----- Dropdown (Apply a Scene) ----- */
+  .scene-chooser{position:relative}
+  .scene-dd{
+    position:absolute; right:0; top:100%; margin-top:6px; background:#fff; border:1px solid var(--border);
+    border-radius:10px; box-shadow:var(--shadow); min-width:280px; display:none; z-index:10;
+  }
+  .scene-dd.open{display:block}
+  .scene-dd .group{padding:8px 8px 6px; border-bottom:1px solid var(--border)}
+  .scene-dd .group:last-child{border-bottom:none}
+  .scene-dd .rowbtn{display:flex; align-items:center; gap:10px; padding:8px; border-radius:8px; cursor:pointer}
+  .scene-dd .rowbtn:hover{background:#f3f6fb}
+  .badge{display:inline-block; width:10px; height:10px; border-radius:2px}
+  .badge.allow{background:#2ba97a}
+  .badge.block{background:#d92d20}
+
+  /* ----- Dialogs ----- */
+  dialog::backdrop{background:rgba(0,0,0,.32)}
+  dialog{border:none; border-radius:12px; width:min(860px,96vw)}
+  .tabslist{display:flex; flex-direction:column; gap:8px; max-height:260px; overflow:auto}
+  .tabrow{display:flex; gap:8px; align-items:center; font-size:12px}
+  .tabrow img{width:14px; height:14px}
+  .tabrow button{margin-left:auto}
+
+  /* ----- Raise-hand toasts ----- */
+  .raise-toast{position:relative; background:#fff; border:1px solid var(--border); border-radius:10px; padding:8px 10px; box-shadow:0 6px 16px rgba(0,0,0,.12); margin-bottom:8px; min-width:260px}
+  .raise-toast .meta{font-size:12px; color:#555}
+  #raiseTray{position:fixed; right:16px; top:16px; z-index:99999; display:flex; flex-direction:column; align-items:flex-end}
+
+  /* Overlay spinner */
+  #overlay{display:none; position:fixed; inset:0; background:rgba(255,255,255,.6); z-index:99998; justify-content:center; align-items:center}
+  #overlay .spin{border:4px solid #eee; border-top:4px solid var(--brand); border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ===== Student Monitor ===== */
+#monitorDlg { width:clamp(1100px, 98vw, 2200px); max-height:98vh; padding:0; }
+.monitor-shell{
+  display:grid;
+  grid-template-columns:3fr 240px; /* way bigger screen, slimmer chat */
+  gap:0;
+  height:min(96vh,1000px);
+}
+
+
+  .monitor-title{font-weight:700}
+  .monitor-actions{margin-left:auto; display:flex; gap:8px}
+  .monitor-actions .btn{padding:6px 10px}
+
+  .browser{
+    display:flex; flex-direction:column; gap:0; background:#f4f6fb;
+    border-top:1px solid var(--border);
+    height:100%;
+  }
+  .tabstrip{
+    display:flex; gap:6px; padding:8px; overflow:auto; background:#eef3ff; border-bottom:1px solid var(--border);
+  }
+  .tabchip{
+    display:flex; flex-direction:column; gap:6px; background:#fff; border:1px solid var(--border);
+    border-radius:10px; padding:6px 8px; cursor:pointer; max-width:240px; min-width:160px;
+  }
+  .tabchip.active{border-color:#0b57d0; box-shadow:0 0 0 1px #0b57d0 inset}
+  .tabhead{display:flex; align-items:center; gap:8px}
+  .tabhead img{width:16px; height:16px}
+  .tabhead .title{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px}
+  .tabhead .close{margin-left:4px; font-weight:700; color:#888; cursor:pointer}
+  .tabhead .close:hover{color:#333}
+  .tabthumb{width:100%; height:48px; object-fit:cover; border:1px solid #e5e8f0; border-radius:8px; background:#fff}
+
+  .monitor-canvas{flex:1; display:flex; align-items:center; justify-content:center; background:#0b1b3410; padding:8px}
+  .monitor-canvas img{width:100%; height:100%; object-fit:contain; border-radius:10px; background:#000}
+
+  /* thumbnails bar under each student card */
+  .thumbbar{display:flex; gap:6px; padding-top:6px; overflow:hidden}
+  .thumbbar img{width:22px; height:22px; border-radius:4px; border:1px solid #e5e8f0; background:#fff}
+  .card .status{display:flex; justify-content:space-between; align-items:center}
+
+  /* DM pane */
+  .dm-pane{
+    border-left:1px solid var(--border); background:#fff; display:flex; flex-direction:column;
+  }
+  .dm-head{
+    display:flex; align-items:center; justify-content:space-between; padding:10px 12px;
+    border-bottom:1px solid var(--border); background:#f7f9fc; font-weight:700;
+  }
+  .dm-thread{flex:1; overflow:auto; padding:12px}
+  .dm-msg{margin:6px 0; max-width:88%}
+  .dm-me{margin-left:auto; text-align:right}
+  .dm-bubble{
+    display:inline-block; padding:8px 10px; border-radius:10px;
+    background:#eef3ff; border:1px solid var(--border);
+  }
+  .dm-me .dm-bubble{ background:#dbeafe; }
+  .dm-meta{font-size:11px; color:#667085; margin-top:2px}
+  .dm-compose{display:flex; gap:8px; padding:10px; border-top:1px solid var(--border);}
+  .dm-compose textarea{flex:1; resize:vertical; min-height:42px}
+
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ========== Sidebar ========== -->
+  <aside class="sidebar">
+    <div class="nav-title">📘 <span>Teacher</span></div>
+    <div class="nav-group">
+      <a class="nav-btn active" id="navClassrooms">🏫 Classrooms</a>
+      <a class="nav-btn" id="navScenes">🧩 Scenes</a>
+      <a class="nav-btn" id="navCalendar">📅 Calendar</a>
+      <a class="nav-btn" id="navReports">📊 Student Reports</a>
+      <a class="nav-btn" id="navHelp">❓ Help</a>
+    </div>
+  </aside>
+
+  <!-- ========== Main ========== -->
+  <main class="main">
+    <!-- Top session toolbar -->
+    <div class="topbar">
+      <strong id="classTitle">G district</strong>
+      <span class="muted">· <span id="updateTime">—</span></span>
+
+      <div class="push"></div>
+      <div class="scene-chooser">
+        <button class="btn secondary" id="sceneToggle">
+          <span id="sceneCurrent">No scene applied</span> ▾
+        </button>
+        <!-- Dropdown -->
+        <div class="scene-dd" id="sceneDropdown">
+          <div class="group">
+            <div class="rowbtn" data-dd="disable-scene">🚫 <span>Disable Scene</span></div>
+            <div class="rowbtn" data-dd="create-scene">➕ <span>Create New Scene</span></div>
+          </div>
+          <div class="group" id="ddAllowed">
+            <div class="muted" style="padding:4px 6px;">Enable Allowed Websites List</div>
+          </div>
+          <div class="group" id="ddBlocked">
+            <div class="muted" style="padding:4px 6px;">Enable Blocked Websites List</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn" id="focusBtn">Focus</button>
+      <button class="btn" id="pauseBtn">Lock</button>
+      <button class="btn" id="announceBtn">Announcement</button>
+      <button class="btn" id="notifyBtn">Notify</button>
+      <button class="btn" id="openTabsBtn">Open Tabs</button>
+      <button class="btn" id="examBtn">Exam Mode</button>
+      <button class="btn" id="pollBtn">Poll</button>
+    </div>
+
+    <!-- Subtabs -->
+    <div class="subtabs">
+      <div class="chip active">Screens</div>
+      <div class="chip">Timelines</div>
+      <div class="chip">Screenshots</div>
+      <div class="chip">Call Students</div>
+      <div class="chip toggle"><input id="chatEnabled" type="checkbox" checked /> Chat</div>
+      <button class="btn" id="applyChat">Apply Chat Settings</button>
+      <div class="chip toggle"><input id="offTask" type="checkbox" /> Off-Task Alerts</div>
+    </div>
+
+    <div class="card" id="offtaskCard">
+      <h3>⚠️ Off-Task Alerts</h3>
+      <div id="offtaskList">No alerts.</div>
+    </div>
+
+    <!-- Views toolbar -->
+    <div class="toolbar" id="subtabs" style="gap:8px">
+      <span><b>Views</b></span>
+      <button class="btn" data-tab="screens">Screens</button>
+      <button class="btn" data-tab="timeline">Timeline</button>
+      <button class="btn" data-tab="shots">Screenshots</button>
+      <button class="btn" data-tab="attention">Attention</button>
+      <button class="btn" data-tab="scenesShare">Scenes</button>
+      <span style="margin-left:auto"></span>
+      <label class="mini" style="display:flex;align-items:center;gap:6px">
+        <input id="offTaskToggle" type="checkbox"> Off-Task Alerts
+      </label>
+      <button class="btn" id="offTaskApply">Apply</button>
+    </div>
+
+    <section id="panels" style="margin-top:8px">
+      <div id="panel-screens"></div>
+
+      <div id="panel-timeline" class="card" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="tlStudent"></select>
+          <button class="btn" id="tlRefresh">Refresh</button>
+        </div>
+        <div id="tlList" class="tabslist" style="margin-top:8px"></div>
+      </div>
+
+      <div id="panel-shots" class="card" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="shStudent"></select>
+          <button class="btn" id="shRefresh">Refresh</button>
+        </div>
+        <div id="shGrid" class="grid" style="margin-top:8px"></div>
+      </div>
+
+      <div id="panel-attention" class="card" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="attStart">Start Check</button>
+          <button class="btn" id="attView">View Results</button>
+        </div>
+        <div id="attResults" class="tabslist" style="margin-top:8px"></div>
+      </div>
+
+      <div id="panel-scenesShare" class="card" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="scnId" placeholder="Scene ID (optional)" style="flex:1 1 220px">
+          <button class="btn" id="scnExportOne">Export One</button>
+          <button class="btn" id="scnExportAll">Export All</button>
+          <input type="file" id="scnImportFile" accept="application/json" style="display:none">
+          <button class="btn" id="scnImportBtn">Import JSON…</button>
+        </div>
+        <pre id="scnOut" style="white-space:pre-wrap;margin-top:8px;max-height:280px;overflow:auto"></pre>
+      </div>
+    </section>
+
+    <!-- Quick toggles -->
+    <div class="topbar" style="gap:18px">
+      <div class="toggle"><input id="active" type="checkbox" checked /> Active</div>
+      <div class="toggle"><input id="focus" type="checkbox" /> Focus (allow-only)</div>
+      <div class="toggle"><input id="paused" type="checkbox" /> Lock Internet</div>
+      <button class="btn" id="saveClass">Apply</button>
+      <div class="push"></div>
+      <button class="btn secondary" id="excludeBtn">Exclude from session</button>
+      <button class="btn secondary" id="presentBtn">Present</button>
+    </div>
+
+    <!-- YouTube Filtering -->
+    <section class="toolbar" style="flex-direction:column;align-items:stretch;gap:12px">
+      <h4>YouTube Filtering</h4>
+      <label>Blocked Keywords<textarea id="ytBlockKeywords" rows="3" placeholder="minecraft&#10;mrbeast"></textarea></label>
+      <label>Blocked Channels<textarea id="ytBlockChannels" rows="3" placeholder="PewDiePie&#10;DanTDM"></textarea></label>
+      <label><input type="checkbox" id="ytAllowMode"> Allow-Only Mode</label>
+      <label>Allowed Channels / Keywords<textarea id="ytAllowList" rows="3" placeholder="Khan Academy&#10;National Geographic"></textarea></label>
+      <button class="btn" id="saveYouTubeRules">Save YouTube Rules</button>
+    </section>
+
+    <!-- Student grid -->
+    <section>
+      <div class="grid" id="screenGrid"></div>
+    </section>
+
+    <!-- Google Doodles -->
+    <section class="toolbar">
+      <h4>Google Doodles</h4>
+      <label><input type="checkbox" id="toggleDoodles"> Block Google Doodles</label>
+      <button class="btn" id="saveDoodles">Apply</button>
+    </section>
+
+    <!-- Scenes board -->
+    <section id="scenesSection" style="display:none">
+      <div class="scenes-board">
+        <div class="panel" id="allowedPanel">
+          <h4>Allowed Websites List</h4>
+          <p class="muted">Students can <b>only</b> access websites you allowed; everything else is blocked.</p>
+          <div>
+            <button class="btn" id="createAllowed">Create List</button>
+            <select id="allowedSort" class="mini" style="margin-left:8px">
+              <option value="recent">Sort by: Recently Used</option>
+              <option value="name">Sort by: Name</option>
+            </select>
+          </div>
+          <div class="scene-list" id="allowedList"></div>
+        </div>
+
+        <div class="panel" id="blockedPanel">
+          <h4>Blocked Websites List</h4>
+          <p class="muted">Students can browse any website, except what you blocked.</p>
+          <div>
+            <button class="btn" id="createBlocked">Create List</button>
+            <select id="blockedSort" class="mini" style="margin-left:8px">
+              <option value="recent">Sort by: Recently Used</option>
+              <option value="name">Sort by: Name</option>
+            </select>
+          </div>
+          <div class="scene-list" id="blockedList"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- raise-hand tray + overlay -->
+<div id="raiseTray"></div>
+<div id="overlay"><div class="spin"></div></div>
+
+<!-- ========= Dialogs ========= -->
+
+<!-- Student modal (legacy, still available) -->
+<dialog id="studentDlg">
+  <h4 id="dlgTitle">Student</h4>
+  <img id="dlgShot" class="shot" src="">
+  <div class="tabslist" id="dlgTabs"></div>
+  <div class="row" style="justify-content:flex-end; margin-top:8px">
+    <button class="btn" id="dlgClose">Close</button>
+  </div>
+</dialog>
+
+<!-- Open Tabs (all students) -->
+<dialog id="openTabsDlg">
+  <h4>Open Tabs on Students</h4>
+  <textarea id="openTabsInput" rows="4" placeholder="Enter one URL per line"></textarea>
+  <div class="row" style="justify-content:flex-end; margin-top:8px">
+    <button class="btn" id="openTabsSend">Send</button>
+    <button class="btn secondary" id="openTabsClose">Cancel</button>
+  </div>
+</dialog>
+
+<!-- Per-student controls -->
+<dialog id="perStudentDlg">
+  <h4>Per-Student Controls</h4>
+  <div class="row" style="flex-wrap:wrap">
+    <select id="studentSelect"></select>
+    <button class="btn" id="stuFocusOn">Focus ON</button>
+    <button class="btn" id="stuFocusOff">Focus OFF</button>
+    <button class="btn" id="stuLock">Lock</button>
+    <button class="btn" id="stuUnlock">Unlock</button>
+    <button class="btn" id="stuOpenTabs">Open Tabs…</button>
+    <button class="btn" id="stuRestore">Restore Tabs</button>
+    <button class="btn" id="stuCloseTabs">Close Tabs</button>
+    <button class="btn" id="stuDM">DM…</button>
+    <button class="btn secondary" id="perStuClose">Close</button>
+  </div>
+</dialog>
+
+<!-- Browser-like monitor -->
+<dialog id="monitorDlg">
+  <div class="monitor-shell">
+    <div class="monitor-top">
+      <span class="monitor-title" id="monitorTitle">Student</span>
+      <label class="mini" style="display:flex;align-items:center;gap:6px;margin-left:12px">
+        <input id="followActiveToggle" type="checkbox" checked> Follow active tab
+      </label>
+      <div class="monitor-actions">
+        <button class="btn" id="monScreenshot">Screenshot</button>
+        <button class="btn" id="monFullscreen">Full screen</button>
+        <button class="btn secondary" id="monClose">Close</button>
+      </div>
+    </div>
+
+    <div class="browser">
+      <div class="tabstrip" id="monTabstrip"></div>
+      <div class="monitor-canvas">
+        <img id="monPreview" src="" alt="preview">
+      </div>
+    </div>
+    <div class="dm-pane">
+      <div class="dm-head">Direct Chat</div>
+      <div class="dm-thread" id="dmThread"><div class="muted">No messages yet.</div></div>
+      <div class="dm-compose">
+        <textarea id="dmInput2" placeholder="Type a private message"></textarea>
+        <button class="btn" id="dmSend2">Send</button>
+      </div>
+    </div>
+
+  </div>
+</dialog>
+
+<!-- ===== Exam Violations Panel ===== -->
+<div class="card" id="examViolationsCard">
+  <h3>🚨 Exam Violations</h3>
+  <div id="examViolationsList">No violations reported.</div>
+</div>
+
+<!-- Student open tabs -->
+<dialog id="stuTabsDlg">
+  <h4>Open Tabs for Student</h4>
+  <textarea id="stuTabsInput" rows="4" placeholder="Enter one URL per line"></textarea>
+  <div class="row" style="justify-content:flex-end; margin-top:8px">
+    <button class="btn" id="stuTabsSend">Send</button>
+    <button class="btn secondary" id="stuTabsClose">Cancel</button>
+  </div>
+</dialog>
+
+<!-- DM -->
+<dialog id="dmDlg">
+  <h4>Message Student</h4>
+  <textarea id="dmInput" rows="3" placeholder="Type a private message"></textarea>
+  <div class="row" style="justify-content:flex-end; margin-top:8px">
+    <button class="btn" id="dmSend">Send</button>
+    <button class="btn secondary" id="dmClose">Cancel</button>
+  </div>
+</dialog>
+
+<!-- Exam mode -->
+<dialog id="examDlg">
+  <h4>Exam Mode</h4>
+  <input id="examUrl" placeholder="https://exam.example.com" style="width:100%; padding:8px; border:1px solid #e2e2e2; border-radius:8px">
+  <div class="row" style="justify-content:flex-end; margin-top:8px">
+    <button class="btn" id="examStart">Start</button>
+    <button class="btn" id="examEnd">End</button>
+    <button class="btn secondary" id="examClose">Close</button>
+  </div>
+</dialog>
+
+<!-- Create / Edit Scene -->
+<dialog id="sceneDlg">
+  <h4 id="sceneDlgTitle">Create Scene</h4>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <label>Name <input id="sceneName" placeholder="Math Class Scene" /></label>
+    <label>Description (optional) <input id="sceneDesc" placeholder="Websites used for class" /></label>
+  </div>
+
+  <details style="margin-top:8px"><summary>Advanced Filtering</summary>
+    <small class="muted">Use one pattern per line. Wildcards supported (e.g., <code>*://*.wikipedia.org/*</code>)</small>
+  </details>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr; margin-top:6px">
+    <label>Allowed list<textarea id="sceneAllow" rows="8" placeholder="https://classroom.google.com
+*://*.khanacademy.org/*"></textarea></label>
+    <label>Blocked list<textarea id="sceneBlock" rows="8" placeholder="*://*.youtube.com/*
+*://*.tiktok.com/*"></textarea></label>
+  </div>
+
+  <div class="row" style="justify-content:space-between; margin-top:8px">
+    <div class="row" style="gap:10px">
+      <label class="row" style="gap:6px"><input id="sceneTypeAllowed" name="sceneType" type="radio" checked> Allowed Websites Scene</label>
+      <label class="row" style="gap:6px"><input id="sceneTypeBlocked" name="sceneType" type="radio"> Blocked Websites Scene</label>
+    </div>
+    <div class="row" style="gap:8px">
+      <button class="btn" id="sceneSave">Save</button>
+      <button class="btn secondary" id="sceneCancel">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+/* -----------------------------------------------------------
+   Utilities
+----------------------------------------------------------- */
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const overlay = $('#overlay');
+const raiseTray = $('#raiseTray');
+function showOverlay(){ overlay.style.display='flex'; }
+function hideOverlay(){ overlay.style.display='none'; }
+function toast(msg, ms=2500){
+  const div=document.createElement('div');
+  div.className='raise-toast';
+  div.innerHTML='<b>'+msg+'</b>';
+  raiseTray.appendChild(div);
+  setTimeout(()=>div.remove(), ms);
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+/* -----------------------------------------------------------
+   Persistent cache (per-student, per-tab screenshots)
+   - localStorage key: studentCache_v1
+   - For each student:
+     { screenshot, lastActive, offline, tabshots: { [tabId]: {dataUrl, title, favIconUrl} } }
+----------------------------------------------------------- */
+const CACHE_KEY = 'studentCache_v1';
+let studentCache = {};
+try{ studentCache = JSON.parse(localStorage.getItem(CACHE_KEY)||'{}'); }catch(_){ studentCache={}; }
+function persistCache(){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify(studentCache)); }catch(_){}
+}
+function setStudentCache(id, patch){
+  studentCache[id] = Object.assign({tabshots:{}}, studentCache[id]||{}, patch||{});
+  persistCache();
+}
+function setTabShot(id, tabId, data){
+  const s = studentCache[id] || {tabshots:{}};
+  s.tabshots = s.tabshots || {};
+  s.tabshots[String(tabId)] = data; // {dataUrl, title, favIconUrl}
+  s.lastActive = Date.now();
+  studentCache[id] = s;
+  persistCache();
+}
+function deleteTabShot(id, tabId){
+  if(studentCache[id] && studentCache[id].tabshots){
+    delete studentCache[id].tabshots[String(tabId)];
+    persistCache();
+  }
+}
+
+/* -----------------------------------------------------------
+   Global UI state
+----------------------------------------------------------- */
+const state = {
+  scenes: {allowed:[], blocked:[], current:null},
+  presence: {}
+};
+
+/* -----------------------------------------------------------
+   Load initial class data
+----------------------------------------------------------- */
+async function loadData(){
+  const j=await (await fetch('/api/data')).json();
+  $('#focus').checked=j.classes.period1.focus_mode; 
+  $('#paused').checked=j.classes.period1.paused;
+  $('#chatEnabled').checked=j.settings.chat_enabled; 
+  $('#active').checked=j.classes.period1.active;
+  $('#classTitle').textContent = j.classes.period1.name || 'MEGACLASS';
+  $('#updateTime').textContent = 'Update Time';
+}
+loadData();
+
+/* -----------------------------------------------------------
+   Presence + Smart Screenshot Persistence
+   - If offline OR inactive >5m -> show cached screenshot
+   - Merge incoming tabshots; drop closed tabs
+----------------------------------------------------------- */
+async function refreshPresence(){
+  const res = await fetch('/api/presence'); if(!res.ok) return;
+  const pres = await res.json(); state.presence = pres;
+
+  const now = Date.now();
+
+  // merge live presence into cache
+  Object.entries(pres).forEach(([student, info])=>{
+    const existing = studentCache[student] || {tabshots:{}};
+    const tabs = info.tabs || [];
+    const openIds = new Set(tabs.map(t=> String(t.id)));
+
+    // Update lastActive on any heartbeat
+    const lastActive = now;
+
+    // Promote fresh class screenshot if provided
+    const newShot = info.screenshot || existing.screenshot || '';
+    const mergedShots = Object.assign({}, existing.tabshots);
+
+    // Merge per-tab last screenshots if backend sends them
+    const incomingTabshots = info.tabshots || {};
+    for (const [tid, shot] of Object.entries(incomingTabshots)){
+      const t = tabs.find(x => String(x.id)===String(tid)) || {};
+      const dataUrl = typeof shot === 'string' ? shot : (shot && shot.dataUrl) || '';
+      mergedShots[String(tid)] = {
+        dataUrl,
+        title: t.title || t.url || '',
+        favIconUrl: t.favIconUrl || ''
+      };
+    }
+
+    // Remove shots for tabs that are no longer open
+    for (const tid of Object.keys(mergedShots)){
+      if(!openIds.has(String(tid))) delete mergedShots[tid];
+    }
+
+    setStudentCache(student, {
+      screenshot: newShot,
+      lastActive,
+      offline: false,
+      tabshots: mergedShots
+    });
+  });
+
+  // Mark offline/inactive students
+  for(const [student, cache] of Object.entries(studentCache)){
+    const seen = pres.hasOwnProperty(student);
+    const inactive = (now - (cache.lastActive||0)) > 5*60*1000;
+    if(!seen || inactive){
+      setStudentCache(student, {offline:true});
+    }
+  }
+
+  // Render grid
+  const grid = $('#screenGrid'); grid.innerHTML='';
+  const allIds = Array.from(new Set([...Object.keys(studentCache), ...Object.keys(pres)])).sort();
+
+  allIds.forEach(student=>{
+    const info = pres[student] || {};
+    const cache = studentCache[student] || {};
+    const isOffline = !!cache.offline;
+
+    const card=document.createElement('div'); 
+    card.className='card ' + (isOffline ? 'offline' : 'online');
+
+    const shot=document.createElement('img'); 
+    shot.className='shot'; 
+    // choose live if online else cached
+    const src = (!isOffline && info.screenshot) ? info.screenshot : (cache.screenshot||'');
+    if(src) shot.src = src;
+    shot.alt = student + ' screen';
+    shot.onclick = ()=> openMonitor(student); // NEW: browser-like monitor on click
+    card.appendChild(shot);
+
+    // top row
+    const r1=document.createElement('div'); 
+    r1.className='status';
+    r1.innerHTML = `
+      <div class="row">
+        <b>${escapeHtml(student)}</b>
+        <span class="pill mini">${escapeHtml((info.tab && info.tab.title) || (isOffline?'Waiting for student activity…':'') )}</span>
+      </div>
+      <span class="mini">${isOffline ? ('Last active ' + timeAgo(cache.lastActive||0)) : 'Online'}</span>
+    `;
+    card.appendChild(r1);
+
+    // thumb bar (per-tab last photos)
+    const bar = document.createElement('div'); 
+    bar.className='thumbbar';
+    const tabs = (info.tabs||[]).slice(0,8);
+    tabs.forEach(t=>{
+      const img=document.createElement('img');
+      const ts = cache.tabshots && cache.tabshots[String(t.id)];
+      const thumb = (typeof ts === 'string') ? ts : (ts && ts.dataUrl);
+      img.src = thumb || (t.favIconUrl || '');
+      img.title = t.title || t.url || '';
+      bar.appendChild(img);
+    });
+    // also show cached shots for tabs that might not be in info (if offline)
+    if(isOffline && cache.tabshots){
+      const extra = Object.entries(cache.tabshots).slice(0,8);
+      extra.forEach(([_, meta])=>{
+        const img=document.createElement('img');
+        const thumb = (typeof meta === 'string') ? meta : (meta && meta.dataUrl);
+        img.src = thumb || '';
+        img.title = (typeof meta === 'object' && meta && meta.title) ? meta.title : '';
+        bar.appendChild(img);
+      });
+    }
+    card.appendChild(bar);
+
+    // actions
+    const actions=document.createElement('div'); 
+    actions.className='row'; actions.style.justifyContent='flex-end'; actions.style.gap='6px';
+    const perStu=document.createElement('button'); perStu.className='btn secondary'; perStu.textContent='Controls';
+    perStu.onclick=()=>{ $('#perStudentDlg').showModal(); $('#studentSelect').value=student; };
+    const view=document.createElement('button'); view.className='btn'; view.textContent='View';
+    view.onclick=()=> openMonitor(student);
+    actions.appendChild(perStu); actions.appendChild(view);
+    card.appendChild(actions);
+
+    grid.appendChild(card);
+  });
+}
+function timeAgo(ts){
+  if(!ts) return 'a while ago';
+  const s = Math.max(1, Math.floor((Date.now()-ts)/1000));
+  if(s<60) return s+'s ago';
+  const m = Math.floor(s/60); if(m<60) return m+'m ago';
+  const h = Math.floor(m/60); return h+'h ago';
+}
+refreshPresence(); setInterval(refreshPresence, 8000);
+
+/* === YouTube Rules (unchanged) === */
+document.getElementById('saveYouTubeRules').onclick = async ()=>{
+  const blockKeywords = document.getElementById('ytBlockKeywords').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const blockChannels = document.getElementById('ytBlockChannels').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const allow = document.getElementById('ytAllowList').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const allowMode = document.getElementById('ytAllowMode').checked;
+  await fetch('/api/youtube_rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({block_keywords:blockKeywords,block_channels:blockChannels,allow:allow,allow_mode:allowMode})});
+  alert('YouTube rules updated');
+};
+async function loadYouTubeRules(){
+  const res=await fetch('/api/youtube_rules');
+  if(!res.ok) return;
+  const r=await res.json();
+  document.getElementById('ytBlockKeywords').value=(r.block_keywords||[]).join('\n');
+  document.getElementById('ytBlockChannels').value=(r.block_channels||[]).join('\n');
+  document.getElementById('ytAllowList').value=(r.allow||[]).join('\n');
+  document.getElementById('ytAllowMode').checked=!!r.allow_mode;
+}
+loadYouTubeRules();
+
+/* -----------------------------------------------------------
+   Legacy student modal (kept)
+----------------------------------------------------------- */
+const dlg=$('#studentDlg'); $('#dlgClose').onclick=()=> dlg.close();
+function openStudent(student, info){
+  dlg.showModal();
+  $('#dlgTitle').textContent=student; $('#dlgShot').src=(info && info.screenshot) || (studentCache[student]?.screenshot||'');
+  const list=$('#dlgTabs'); list.innerHTML='';
+  const tabshots=(studentCache[student]?.tabshots)||{};
+  ((info&&info.tabs)||[]).forEach(t=>{
+    const row=document.createElement('div'); row.className='tabrow';
+    const ico=document.createElement('img'); ico.src=t.favIconUrl||''; row.appendChild(ico);
+    const span=document.createElement('span'); span.textContent=t.title||t.url||''; row.appendChild(span);
+    const cap=document.createElement('button'); cap.className='btn'; cap.textContent='Capture'; row.appendChild(cap);
+    const x=document.createElement('button'); x.className='btn'; x.textContent='✖'; row.appendChild(x);
+    if(tabshots[t.id]){
+      const meta = tabshots[t.id];
+      const dataUrl = (typeof meta === 'string') ? meta : meta.dataUrl;
+      if (dataUrl){
+        const img=document.createElement('img'); img.src=dataUrl; img.style.maxWidth='100%'; img.style.border='1px solid #ccc'; img.style.borderRadius='6px'; img.style.margin='6px 0'; row.appendChild(img);
+      }
+    }
+    list.appendChild(row);
+    cap.onclick=async()=>{
+      await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student, command:{type:'screencap', tabId:t.id}})});
+      setTimeout(refreshPresence,1200);
+    };
+    x.onclick=async()=>{
+      await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student, command:{type:'close_tabs', pattern:(t.url||'*').replace(/[#?].*$/,'*')}})});
+      deleteTabShot(student, t.id); // remove cached shot on close
+      setTimeout(refreshPresence,800);
+    };
+  });
+}
+
+/* -----------------------------------------------------------
+   Session buttons / class settings
+----------------------------------------------------------- */
+$('#saveClass').onclick=async()=>{
+  await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'focus_mode',value:$('#focus').checked})});
+  await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'paused',value:$('#paused').checked})});
+  await fetch('/api/class/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:$('#active').checked, chat_enabled:$('#chatEnabled').checked})});
+  toast('Class settings updated');
+};
+$('#announceBtn').onclick=async()=>{ const msg=prompt('Announcement'); if(msg!=null){ await fetch('/api/announce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}); toast('Announcement sent'); } };
+$('#openTabsBtn').onclick=()=> $('#openTabsDlg').showModal();
+$('#openTabsClose').onclick=()=> $('#openTabsDlg').close();
+$('#openTabsSend').onclick=async()=>{
+  const urls=$('#openTabsInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!urls.length){ alert('Enter at least one URL'); return; }
+  await fetch('/api/open_tabs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls})});
+  toast('Tabs opened on students'); $('#openTabsDlg').close();
+};
+
+(async function examWiring(){
+  const examBtn = $('#examBtn'), examDlg=$('#examDlg');
+  $('#examClose').onclick=()=> examDlg.close();
+  examBtn.onclick=()=> examDlg.showModal();
+  $('#examStart').onclick = async ()=>{
+    const url = ($('#examUrl').value||'').trim();
+    if(!url){ alert('Enter Exam URL'); return; }
+    const res = await fetch('/api/exam',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({action:'start', url})});
+    if(res.ok){ toast('Exam started'); examDlg.close(); } else { alert('Failed: '+await res.text()); }
+  };
+  $('#examEnd').onclick = async ()=>{
+    const res = await fetch('/api/exam',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({action:'end'})});
+    if(res.ok){ toast('Exam ended'); examDlg.close(); } else { alert('Failed: '+await res.text()); }
+  };
+})();
+
+/* Class-wide Focus + Lock with per-student propagation */
+$('#focusBtn').onclick = async ()=>{
+  const box=$('#focus'); box.checked=!box.checked; showOverlay();
+  try{
+    await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'focus_mode',value:box.checked})});
+    const res=await fetch('/api/presence'); if(res.ok){
+      const pres=await res.json();
+      for(const s of Object.keys(pres)){
+        await fetch('/api/student/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student:s, focus_mode:box.checked})});
+      }
+    }
+    toast('Focus '+(box.checked?'enabled':'disabled')+' for all students');
+  }finally{ hideOverlay(); }
+};
+$('#pauseBtn').onclick = async ()=>{
+  const box=$('#paused'); box.checked=!box.checked; showOverlay();
+  try{
+    await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'paused',value:box.checked})});
+    const res=await fetch('/api/presence'); if(res.ok){
+      const pres=await res.json();
+      for(const s of Object.keys(pres)){
+        await fetch('/api/student/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student:s, paused:box.checked})});
+      }
+    }
+    toast('Internet '+(box.checked?'locked':'unlocked')+' for all students');
+  }finally{ hideOverlay(); }
+};
+
+/* Notify */
+$('#notifyBtn').onclick = async ()=>{
+  const title = prompt('Notification title','Look at the teacher'); if(title===null) return;
+  const message = prompt('Message (optional)','Please look up at the teacher now.');
+  await fetch('/api/notify',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({title, message})});
+  toast('Notification sent');
+};
+
+/* -----------------------------------------------------------
+   Per-student controls (dialog)
+----------------------------------------------------------- */
+function currentStudent(){ return $('#studentSelect').value || ''; }
+async function setStudent(payload){
+  payload.student = currentStudent(); if(!payload.student){ alert('Pick a student first'); return; }
+  const r = await fetch('/api/student/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!r.ok){ alert('Failed'); }
+}
+async function loadStudentsIntoSelect(){
+  try{
+    const p = await (await fetch('/api/presence')).json();
+    const sel = $('#studentSelect'); sel.innerHTML = '';
+    Object.keys(p||{}).sort().forEach(id=>{
+      const opt = document.createElement('option'); opt.value=id; opt.textContent=id; sel.appendChild(opt);
+    });
+  }catch(e){}
+}
+setInterval(loadStudentsIntoSelect, 5000); loadStudentsIntoSelect();
+$('#stuFocusOn').onclick=()=>setStudent({focus_mode:true});
+$('#stuFocusOff').onclick=()=>setStudent({focus_mode:false});
+$('#stuLock').onclick=()=>setStudent({paused:true});
+$('#stuUnlock').onclick=()=>setStudent({paused:false});
+$('#perStuClose').onclick=()=>$('#perStudentDlg').close();
+$('#stuOpenTabs').onclick=()=>$('#stuTabsDlg').showModal();
+$('#stuTabsClose').onclick=()=>$('#stuTabsDlg').close();
+$('#stuTabsSend').onclick=async()=>{
+  const urls=$('#stuTabsInput').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!urls.length){ alert('Enter at least one URL'); return; }
+  const student = currentStudent(); if(!student){ alert('Pick a student first'); return; }
+  await fetch('/api/student/open_tabs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student, urls})});
+  $('#stuTabsDlg').close(); toast('Sent');
+};
+$('#stuRestore').onclick=async()=>{
+  const student=currentStudent(); if(!student){ alert('Pick a student first'); return; }
+  await fetch('/api/student/tabs_action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student, action:'restore_tabs'})});
+  toast('Restore requested');
+};
+$('#stuCloseTabs').onclick=async()=>{
+  const student=currentStudent(); if(!student){ alert('Pick a student first'); return; }
+  await fetch('/api/student/tabs_action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student, action:'close_tabs'})});
+  // clear all cached tabshots for this student
+  if(studentCache[student]){ studentCache[student].tabshots={}; persistCache(); }
+  toast('Close requested');
+};
+$('#stuDM').onclick=()=>$('#dmDlg').showModal();
+$('#dmClose').onclick=()=>$('#dmDlg').close();
+$('#dmSend').onclick=async()=>{
+  const text=$('#dmInput').value.trim(); if(!text){ alert('Type a message'); return; }
+  const student=currentStudent(); if(!student){ alert('Pick a student first'); return; }
+  await fetch('/api/dm/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student, text, from:'teacher'})});
+  $('#dmDlg').close(); toast('DM sent');
+};
+
+
+/* -------- Direct Chat (DM) in monitor -------- */
+let DM = { timer:null, last:0 };
+
+function formatTime(ts){
+  try{ return new Date(ts*1000).toLocaleTimeString(); }catch(_){ return ''; }
+}
+
+function renderDM(msgs){
+  const wrap = $('#dmThread');
+  wrap.innerHTML = '';
+  if(!msgs || !msgs.length){ wrap.innerHTML = '<div class="muted">No messages yet.</div>'; return; }
+  msgs.forEach(m=>{
+    const me = (m.from==='teacher');
+    const row = document.createElement('div');
+    row.className = 'dm-msg' + (me ? ' dm-me' : '');
+    const bubble = document.createElement('div');
+    bubble.className = 'dm-bubble';
+    bubble.textContent = m.text || '';
+    const meta = document.createElement('div');
+    meta.className = 'dm-meta';
+    meta.textContent = (me ? 'You' : 'Student') + ' • ' + formatTime(m.ts||0);
+    row.appendChild(bubble); row.appendChild(meta);
+    wrap.appendChild(row);
+  });
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+async function fetchDM(){
+  if(!MON.student) return;
+  try{
+    const r = await fetch('/api/dm/me?student=' + encodeURIComponent(MON.student));
+    if(!r.ok) return;
+    const j = await r.json();
+    const msgs = j.messages || j || [];
+    // normalize fields (api_dm_me uses role in sqlite version)
+    msgs.forEach(m=>{ if(m.role && !m.from) m.from = m.role; });
+    renderDM(msgs);
+  }catch(_){}
+}
+
+function startDM(){
+  stopDM();
+  fetchDM();
+  DM.timer = setInterval(fetchDM, 3000);
+}
+function stopDM(){
+  if(DM.timer){ clearInterval(DM.timer); DM.timer=null; }
+}
+
+$('#dmSend2').onclick = async ()=>{
+  const ta = $('#dmInput2');
+  const text = ta.value.trim();
+  if(!text) return;
+  await fetch('/api/dm/send',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ student: MON.student, text, from:'teacher' })
+  });
+  ta.value='';
+  fetchDM();
+};
+
+/* -----------------------------------------------------------
+   Raise-hand tray (unchanged)
+----------------------------------------------------------- */
+let seenHands = new Set();
+async function pollHands(){
+  try{
+    const r = await fetch('/api/raise_hand'); if(!r.ok) return;
+    const j = await r.json();
+    const hands = j.hands||[];
+    hands.forEach(h=>{
+      const key = String(h.ts||'0'); if(seenHands.has(key)) return; seenHands.add(key);
+      const card=document.createElement('div'); card.className='raise-toast';
+      const who = (h.student||'Unknown').trim()||'Unknown'; const note = h.note||'';
+      card.innerHTML = '<b>✋ '+escapeHtml(who)+'</b>' + (note ? '<div class="meta">'+escapeHtml(note)+'</div>':'');
+      const x=document.createElement('button'); x.textContent='Dismiss'; x.className='btn'; x.style.cssText='margin-left:8px;padding:4px 8px';
+      x.onclick = async ()=>{ try{ await fetch('/api/raise_hand/clear',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({ts:h.ts, student:h.student})}); }catch(e){} raiseTray.removeChild(card); };
+      const row=document.createElement('div'); row.style.display='flex'; row.style.gap='6px'; row.style.alignItems='center';
+      const left=document.createElement('div'); left.style.flex='1 1 auto'; left.innerHTML = card.innerHTML; card.innerHTML=''; row.appendChild(left); row.appendChild(x); card.appendChild(row);
+      raiseTray.appendChild(card);
+    });
+  }catch(e){}
+}
+setInterval(pollHands, 3000); pollHands();
+
+/* -----------------------------------------------------------
+   Scenes (unchanged endpoints)
+----------------------------------------------------------- */
+const scenesSection = $('#scenesSection');
+$('#navScenes').onclick = ()=>{ $$('.nav-btn').forEach(b=>b.classList.remove('active')); $('#navScenes').classList.add('active'); scenesSection.style.display='block'; };
+$('#navClassrooms').onclick = ()=>{ $$('.nav-btn').forEach(b=>b.classList.remove('active')); $('#navClassrooms').classList.add('active'); scenesSection.style.display='none'; };
+
+async function _load_scenes_api(){ const r = await fetch('/api/scenes'); if(!r.ok) throw new Error('scenes'); return r.json(); }
+async function loadScenes(){
+  try{
+    const j = await _load_scenes_api();
+    state.scenes.allowed=j.allowed||[]; state.scenes.blocked=j.blocked||[]; state.scenes.current=j.current||null;
+    renderSceneLists(); renderSceneDropdown();
+  }catch(e){ console.warn('scenes load failed',e); }
+}
+function sortScenes(arr, mode){ 
+  return [...arr].sort((a,b)=> mode==='name' ? a.name.localeCompare(b.name) : (new Date(b.updated_at||0)-new Date(a.updated_at||0)));
+}
+function sceneItemHtml(s){
+  const icon = s.type==='allowed' ? '<span class="badge allow"></span>' : '<span class="badge block"></span>';
+  return `
+    <div class="scene-item" data-id="${s.id}">
+      ${icon}
+      <div style="display:flex; flex-direction:column">
+        <span class="scene-title">${escapeHtml(s.name)}</span>
+        <span class="muted">${escapeHtml(s.desc||'')}</span>
+      </div>
+      <div class="menu">
+        <button class="btn secondary" data-act="set-default">Set as Default</button>
+        <button class="btn secondary" data-act="edit">Edit</button>
+        <button class="btn secondary" data-act="share">Share</button>
+        <button class="btn secondary" data-act="copy">Copy</button>
+        <button class="btn secondary" data-act="delete">Delete</button>
+      </div>
+    </div>`;
+}
+function renderSceneLists(){
+  const aWrap = $('#allowedList'); const bWrap = $('#blockedList');
+  const a = sortScenes(state.scenes.allowed, $('#allowedSort').value||'recent');
+  const b = sortScenes(state.scenes.blocked, $('#blockedSort').value||'recent');
+  aWrap.innerHTML = a.map(sceneItemHtml).join('') || `<div class="muted">No Allowed scenes yet.</div>`;
+  bWrap.innerHTML = b.map(sceneItemHtml).join('') || `<div class="muted">No Blocked scenes yet.</div>`;
+
+  [...aWrap.querySelectorAll('.scene-item'), ...bWrap.querySelectorAll('.scene-item')].forEach(el=>{
+    el.addEventListener('click', ev=>{
+      const id = el.getAttribute('data-id');
+      const act = ev.target.getAttribute('data-act');
+      if(!act) return;
+      ev.stopPropagation();
+      if(act==='edit') openSceneEditor(id);
+      if(act==='delete') deleteScene(id);
+      if(act==='copy') copyScene(id);
+      if(act==='set-default') setDefaultScene(id);
+      if(act==='share') alert('Share UI not implemented yet');
+    });
+  });
+}
+function renderSceneDropdown(){
+  const ddA = $('#ddAllowed'); const ddB=$('#ddBlocked');
+  ddA.querySelectorAll('.rowbtn.item').forEach(n=>n.remove());
+  ddB.querySelectorAll('.rowbtn.item').forEach(n=>n.remove());
+  state.scenes.allowed.forEach(s=>{
+    const r=document.createElement('div'); r.className='rowbtn item'; r.innerHTML='📘 <span>'+escapeHtml(s.name)+'</span>';
+    r.onclick=()=>applyScene(s.id);
+    ddA.appendChild(r);
+  });
+  state.scenes.blocked.forEach(s=>{
+    const r=document.createElement('div'); r.className='rowbtn item'; r.innerHTML='⛔ <span>'+escapeHtml(s.name)+'</span>';
+    r.onclick=()=>applyScene(s.id);
+    ddB.appendChild(r);
+  });
+  const cur = state.scenes.current;
+  $('#sceneCurrent').textContent = cur ? cur.name : 'No scene applied';
+}
+$('#sceneToggle').onclick = (e)=>{ e.stopPropagation(); $('#sceneDropdown').classList.toggle('open'); };
+document.addEventListener('click', ()=> $('#sceneDropdown').classList.remove('open'));
+$('#sceneDropdown [data-dd="disable-scene"]').onclick = ()=> disableScene();
+$('#sceneDropdown [data-dd="create-scene"]').onclick = ()=> openSceneEditor();
+$('#createAllowed').onclick = ()=> openSceneEditor(null,'allowed');
+$('#createBlocked').onclick = ()=> openSceneEditor(null,'blocked');
+$('#allowedSort').onchange = renderSceneLists;
+$('#blockedSort').onchange = renderSceneLists;
+
+/* Scene editor */
+const sceneDlg = $('#sceneDlg');
+function openSceneEditor(id=null, presetType=null){
+  sceneDlg.showModal();
+  $('#sceneDlgTitle').textContent = id ? 'Edit Scene' : 'Create Scene';
+  $('#sceneName').value=''; $('#sceneDesc').value='';
+  $('#sceneAllow').value=''; $('#sceneBlock').value='';
+  $('#sceneTypeAllowed').checked = presetType ? presetType==='allowed' : true;
+  $('#sceneTypeBlocked').checked = presetType ? presetType==='blocked' : false;
+
+  if(id){
+    const s = state.scenes.allowed.concat(state.scenes.blocked).find(x=>x.id===id);
+    if(!s) return;
+    $('#sceneName').value = s.name||'';
+    $('#sceneDesc').value = s.desc||'';
+    $('#sceneAllow').value = (s.allow||[]).join('\n');
+    $('#sceneBlock').value = (s.block||[]).join('\n');
+    $('#sceneTypeAllowed').checked = s.type==='allowed';
+    $('#sceneTypeBlocked').checked = s.type==='blocked';
+    sceneDlg.dataset.editId = id;
+  }else{
+    delete sceneDlg.dataset.editId;
+  }
+}
+$('#sceneCancel').onclick = ()=> sceneDlg.close();
+$('#sceneSave').onclick = async ()=>{
+  const payload = {
+    name: $('#sceneName').value.trim(),
+    desc: $('#sceneDesc').value.trim(),
+    type: $('#sceneTypeAllowed').checked ? 'allowed' : 'blocked',
+    allow: $('#sceneAllow').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    block: $('#sceneBlock').value.split('\n').map(s=>s.trim()).filter(Boolean),
+  };
+  if(!payload.name){ alert('Name required'); return; }
+
+  if(sceneDlg.dataset.editId){
+    const id = sceneDlg.dataset.editId;
+    await fetch(`/api/scenes/${encodeURIComponent(id)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    toast('Scene updated');
+  }else{
+    const r = await fetch('/api/scenes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok){ alert('Failed to create scene'); return; }
+    toast('Scene created');
+  }
+  sceneDlg.close(); await loadScenes();
+};
+
+/* Doodles + chat apply (unchanged) */
+async function loadDoodles(){
+  const res = await fetch('/api/doodle_block');
+  if(res.ok){
+    const j = await res.json();
+    document.getElementById('toggleDoodles').checked = j.enabled;
+  }
+}
+loadDoodles();
+document.getElementById('saveDoodles').onclick = async ()=>{
+  const enabled = document.getElementById('toggleDoodles').checked;
+  await fetch('/api/doodle_block',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({enabled})});
+  alert("Doodle blocking " + (enabled ? "enabled" : "disabled"));
+};
+document.getElementById('applyChat').onclick = async ()=>{
+  const enabled = document.getElementById('chatEnabled').checked;
+  await fetch('/api/class/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({chat_enabled: enabled})});
+  alert("Chat has been " + (enabled ? "enabled" : "disabled"));
+};
+
+/* Scene actions */
+async function applyScene(id){
+  $('#sceneDropdown').classList.remove('open'); showOverlay();
+  try{
+    const r = await fetch('/api/scenes/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_id:id})});
+    if(r.ok){ toast('Scene applied'); }
+  }finally{ hideOverlay(); loadScenes(); }
+}
+async function disableScene(){
+  $('#sceneDropdown').classList.remove('open');
+  await fetch('/api/scenes/apply',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({disable:true})});
+  toast('Scene disabled'); loadScenes();
+}
+async function deleteScene(id){
+  if(!confirm('Delete this scene?')) return;
+  await fetch(`/api/scenes/${encodeURIComponent(id)}`,{method:'DELETE'});
+  toast('Scene deleted'); loadScenes();
+}
+async function copyScene(id){
+  const s = state.scenes.allowed.concat(state.scenes.blocked).find(x=>x.id===id);
+  if(!s) return;
+  const payload = {...s, name: s.name + ' (Copy)'}; delete payload.id;
+  await fetch('/api/scenes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  toast('Scene copied'); loadScenes();
+}
+async function setDefaultScene(id){
+  await fetch('/api/scenes/set_default',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scene_id:id})});
+  toast('Default scene set');
+}
+loadScenes();
+
+/* -----------------------------------------------------------
+   Views wiring (timeline, shots, attention, scenes share)
+----------------------------------------------------------- */
+(function(){
+  const tabBtns = document.querySelectorAll('#subtabs [data-tab]');
+  const showTab = (name)=>{
+    ['screens','timeline','shots','attention','scenesShare'].forEach(t=>{
+      const el=document.getElementById('panel-'+t);
+      if(el) el.style.display = (t===name ? '' : 'none');
+    });
+  };
+  tabBtns.forEach(b=> b.onclick = ()=> showTab(b.dataset.tab));
+  showTab('screens');
+
+  async function populateSelects(){
+    try{
+      const res = await fetch('/api/presence'); if(!res.ok) return;
+      const pres = await res.json();
+      const ids = Object.keys(pres||{}).sort();
+      for(const elId of ['tlStudent', 'shStudent']){
+        const sel = document.getElementById(elId);
+        if(!sel) continue;
+        sel.innerHTML='';
+        ids.forEach(id=>{
+          const o=document.createElement('option'); o.value=id; o.textContent=id; sel.appendChild(o);
+        });
+      }
+    }catch(e){}
+  }
+  populateSelects(); setInterval(populateSelects, 7000);
+
+  async function loadTimeline(){
+    const sel = document.getElementById('tlStudent');
+    const student = sel && sel.value ? sel.value : '';
+    const url = student ? `/api/timeline?student=${encodeURIComponent(student)}&limit=400`
+                        : `/api/timeline?limit=400`;
+    const j = await (await fetch(url)).json();
+    const list = document.getElementById('tlList');
+    list.innerHTML = '';
+    (j.items||[]).slice().reverse().forEach(e=>{
+      const row = document.createElement('div');
+      row.className = 'tabrow';
+      row.innerHTML = `
+        ${e.favIconUrl ? `<img src="${e.favIconUrl}">` : '<span></span>'}
+        <span><b>${(e.student? e.student+' · ' : '')}</b>${escapeHtml(e.title||e.url||'')}</span>
+        <span class="mini" style="margin-left:auto">${new Date((e.ts||0)*1000).toLocaleTimeString()}</span>
+      `;
+      list.appendChild(row);
+    });
+  }
+  document.getElementById('tlRefresh').onclick = loadTimeline;
+
+  async function loadShots(){
+    const sel = document.getElementById('shStudent');
+    const student = sel && sel.value ? sel.value : '';
+    const url = student ? `/api/screenshots?student=${encodeURIComponent(student)}&limit=100`
+                        : `/api/screenshots?limit=100`;
+    const j = await (await fetch(url)).json();
+    const grid = document.getElementById('shGrid'); grid.innerHTML='';
+    (j.items||[]).slice().reverse().forEach(it=>{
+      const card=document.createElement('div'); card.className='card';
+      const img=document.createElement('img'); img.className='shot'; img.src = it.dataUrl || ''; card.appendChild(img);
+      const cap=document.createElement('div'); cap.className='mini';
+      cap.textContent = `${it.student||''} ${(it.title||'').slice(0,60)}  · ${new Date((it.ts||0)*1000).toLocaleTimeString()}`;
+      card.appendChild(cap);
+      grid.appendChild(card);
+    });
+  }
+  document.getElementById('shRefresh').onclick = loadShots;
+
+  async function loadAttentionResults(){
+    const j = await (await fetch('/api/attention_results')).json();
+    const box = document.getElementById('attResults'); box.innerHTML='';
+    const r = j.responses || {};
+    Object.keys(r).sort().forEach(s=>{
+      const row=document.createElement('div'); row.className='tabrow';
+      row.innerHTML = `<span><b>${escapeHtml(s)}</b> — ${escapeHtml(r[s].response||'')}</span>
+                       <span class="mini" style="margin-left:auto">${new Date((r[s].ts||0)*1000).toLocaleTimeString()}</span>`;
+      box.appendChild(row);
+    });
+  }
+  document.getElementById('attStart').onclick = async ()=>{
+    const title = prompt('Prompt to show students','Are you paying attention?');
+    if(title===null) return;
+    await fetch('/api/attention_check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
+    alert('Started'); loadAttentionResults();
+  };
+  document.getElementById('attView').onclick = loadAttentionResults;
+
+  // Scenes share
+  const scnOut = document.getElementById('scnOut');
+  document.getElementById('scnExportOne').onclick = async ()=>{
+    const id = (document.getElementById('scnId').value||'').trim();
+    if(!id){ alert('Enter a Scene ID'); return; }
+    const j = await (await fetch('/api/scenes/export?id='+encodeURIComponent(id))).json();
+    scnOut.textContent = JSON.stringify(j, null, 2);
+  };
+  document.getElementById('scnExportAll').onclick = async ()=>{
+    const j = await (await fetch('/api/scenes/export')).json();
+    scnOut.textContent = JSON.stringify(j, null, 2);
+  };
+  const scnImportFile = document.getElementById('scnImportFile');
+  document.getElementById('scnImportBtn').onclick = ()=> scnImportFile.click();
+  scnImportFile.onchange = async (e)=>{
+    const f = e.target.files && e.target.files[0]; if(!f) return;
+    const text = await f.text();
+    let payload;
+    try{ payload = JSON.parse(text); }catch(_){ alert('Invalid JSON'); return; }
+    const j = await (await fetch('/api/scenes/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+    alert(j.ok ? 'Imported' : ('Failed: '+(j.error||'')));
+  };
+
+  // Off-task alerts small helper
+  const offTaskToggle = document.getElementById('offTaskToggle');
+  const offTaskApply = document.getElementById('offTaskApply');
+  let alertTimer = null;
+  function startAlerts(){
+    stopAlerts();
+    alertTimer = setInterval(async ()=>{
+      const r = await fetch('/api/alerts'); if(!r.ok) return;
+      const j = await r.json();
+      (j.items||[]).slice(-5).forEach(it=>{
+        showToast(`⚠️ ${it.student} ${it.kind} — ${(it.title||it.url||'')}`);
+      });
+    }, 7000);
+  }
+  function stopAlerts(){ if(alertTimer){ clearInterval(alertTimer); alertTimer=null; } }
+  offTaskApply.onclick = ()=>{
+    if(offTaskToggle.checked){ startAlerts(); alert("Off-Task Alerts enabled"); }
+    else { stopAlerts(); alert("Off-Task Alerts disabled"); }
+  };
+  function showToast(msg){
+    const tray = document.getElementById('raiseTray') || document.body;
+    const div=document.createElement('div'); div.className='raise-toast'; div.innerHTML='<b>'+msg+'</b>';
+    tray.appendChild(div); setTimeout(()=>div.remove(), 3000);
+  }
+})();
+</script>
+
+<script>
+/* ====================== Browser-like Monitor ====================== */
+const monitorDlg = $('#monitorDlg');
+const monTitle   = $('#monitorTitle');
+const monTabstrip= $('#monTabstrip');
+const monPreview = $('#monPreview');
+const followChk  = $('#followActiveToggle');
+
+let MON = { student:null, tabs:[], activeTabId:null, timer:null, fs:false };
+
+function pickActiveId(tabs){
+  const a = tabs.find(t=>t.active);
+  return a ? a.id : (tabs[0]?.id ?? null);
+}
+
+function renderTabstrip(){
+  monTabstrip.innerHTML = '';
+  const shots = (studentCache[MON.student]?.tabshots)||{};
+  MON.tabs.forEach(t=>{
+    const chip = document.createElement('div');
+    chip.className = 'tabchip' + (String(t.id)===String(MON.activeTabId) ? ' active':'');
+    const raw = shots[String(t.id)];
+    const thumbSrc = typeof raw === 'string' ? raw : (raw && raw.dataUrl) || '';
+    chip.innerHTML =
+      `<div class="tabhead">
+         ${t.favIconUrl?`<img src="${t.favIconUrl}">`:'<span></span>'}
+         <span class="title">${escapeHtml(t.title||t.url||'')}</span>
+         <span class="close" title="Close tab">✕</span>
+       </div>
+       ${thumbSrc ? `<img class="tabthumb" src="${thumbSrc}" alt="">` : ''}`;
+    chip.onclick = (e)=>{
+      if(e.target.classList.contains('close')) return;
+      MON.activeTabId = t.id; updatePreview();
+      followChk.checked = false;
+    };
+    chip.querySelector('.close').onclick = async (e)=>{
+      e.stopPropagation();
+      await fetch('/api/command',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          student: MON.student,
+          command: { type:'close_tabs', pattern: (t.url||'*').replace(/[#?].*$/,'*') }
+        })
+      });
+      deleteTabShot(MON.student, t.id); // purge cached shot when closed
+      await pullOnePresence();
+    };
+    monTabstrip.appendChild(chip);
+  });
+}
+
+function setPreviewFromShots(){
+  const shots = (studentCache[MON.student]?.tabshots)||{};
+  const tab = MON.tabs.find(t=>String(t.id)===String(MON.activeTabId));
+  const raw = shots[String(MON.activeTabId)];
+  const shot = typeof raw === 'string' ? raw : (raw && raw.dataUrl);
+  monPreview.src = shot || tab?.screenshot || (studentCache[MON.student]?.screenshot||'');
+}
+
+function updatePreview(){
+  const shots = (studentCache[MON.student]?.tabshots)||{};
+  const raw = shots[String(MON.activeTabId)];
+  const current = typeof raw === 'string' ? raw : (raw && raw.dataUrl);
+  const fallback = (studentCache[MON.student]?.screenshot)||'';
+  monPreview.src = current || fallback || '';
+  renderTabstrip();
+}
+
+async function pullOnePresence(){
+  const pres = await (await fetch('/api/presence')).json();
+  state.presence = pres;
+  const info = pres[MON.student] || {};
+  MON.tabs = info.tabs||[];
+
+  // merge incoming per-tab shots if provided (accept string or {dataUrl})
+  const inc = info.tabshots || {};
+  for(const [tid, shot] of Object.entries(inc)){
+    const t = MON.tabs.find(x=> String(x.id)===String(tid)) || {};
+    const dataUrl = typeof shot === 'string' ? shot : (shot && shot.dataUrl) || '';
+    setTabShot(MON.student, tid, {dataUrl, title:t.title||t.url||'', favIconUrl:t.favIconUrl||''});
+  }
+
+  if(followChk.checked){
+    MON.activeTabId = pickActiveId(MON.tabs);
+  }
+  updatePreview();
+}
+
+function startFollow(){ stopFollow(); MON.timer = setInterval(pullOnePresence, 3000); }
+function stopFollow(){ if(MON.timer){ clearInterval(MON.timer); MON.timer=null; } }
+
+async function openMonitor(student){
+  MON.student = student;
+  monTitle.textContent = `${student}'s Screen`;
+  followChk.checked = true;
+
+  const info = state.presence[student] || {};
+  MON.tabs = info.tabs||[];
+  MON.activeTabId = pickActiveId(MON.tabs);
+
+  updatePreview();
+  monitorDlg.showModal();
+  startFollow();
+  startDM();
+  startDM();
+}
+
+/* Buttons */
+$('#monClose').onclick = ()=>{ stopFollow(); stopDM(); monitorDlg.close(); };
+$('#monScreenshot').onclick = async ()=>{
+  const tabId = MON.activeTabId;
+  if(!tabId) return;
+  await fetch('/api/command',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ student:MON.student, command:{type:'screencap', tabId} })
+  });
+  // short delay; presence should return updated tabshot
+  setTimeout(pullOnePresence, 1200);
+};
+$('#monFullscreen').onclick = ()=>{
+  try{ monitorDlg.requestFullscreen(); MON.fs = true; }catch(_){}
+};
+document.addEventListener('fullscreenchange', ()=>{
+  if(!document.fullscreenElement) MON.fs = false;
+});
+followChk.onchange = ()=>{ if(followChk.checked) startFollow(); else stopFollow(); };
+
+/* ==================== end Browser-like Monitor ==================== */
+</script>
+
+<script>
+/* ===== Exam Violations (unchanged) ===== */
+async function loadExamViolations(){
+  try {
+    const r = await fetch("/api/exam_violations");
+    if(!r.ok) return;
+    const j = await r.json();
+    const list = document.getElementById("examViolationsList");
+
+    if(!j.ok || !j.items.length){
+      list.textContent = "No violations reported.";
+      return;
+    }
+
+    list.innerHTML = "";
+    j.items.slice().reverse().forEach(v=>{
+      const div = document.createElement("div");
+      div.className = "violation";
+      const ts = new Date(v.ts*1000).toLocaleTimeString();
+
+      div.innerHTML = `
+        <b>${v.student}</b> — ${v.reason} 
+        ${v.url ? `<a href="${v.url}" target="_blank">[link]</a>` : ""} 
+        <span class="mini">(${ts})</span><br>
+        <button class="btn-dismiss">Dismiss</button>
+        <button class="btn-close">Close Test</button>
+      `;
+
+      div.querySelector(".btn-dismiss").onclick = async()=>{
+        try {
+          await fetch("/api/exam_violations/clear", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({student: v.student})
+          });
+          loadExamViolations();
+        } catch(e) { console.error("Dismiss failed", e); }
+      };
+
+      div.querySelector(".btn-close").onclick = async()=>{
+        try {
+          await fetch(`/api/commands/${encodeURIComponent(v.student)}`, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({type:"exam_end"})
+          });
+          await fetch("/api/exam_violations/clear", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({student: v.student})
+          });
+          loadExamViolations();
+        } catch(e) { console.error("Close test failed", e); }
+      };
+
+      list.appendChild(div);
+    });
+  } catch(e) {
+    console.error("loadExamViolations", e);
+  }
+}
+setInterval(loadExamViolations, 5000);
+loadExamViolations();
+</script>
+
+<div style="position:fixed;right:16px;bottom:16px;background:#0b57d0;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 6px 16px rgba(0,0,0,.2);font-weight:600"><a href="/teacher/present" style="color:#fff;text-decoration:none">🖥️ Teacher Presentation</a></div></body>
+</html>

@@ -1,0 +1,344 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teacher · G School</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+body{max-width:1400px;margin:auto;padding:1rem}
+body, label, h3, h4, .mini, button, .btn { color:#000 !important; }
+.toolbar{display:flex;gap:8px;align-items:center;background:#f3f6fb;border-radius:10px;padding:8px 12px;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.card{background:#fff;border:1px solid #e6e9ef;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.06);padding:10px}
+.shot{width:100%;height:150px;object-fit:cover;border-radius:8px;border:1px solid #e6e6e6;background:#fafafa}
+.mini{font-size:12px}
+.btn{background:#0b57d0;color:#fff !important;font-weight:600;border:none;border-radius:8px;padding:6px 8px;cursor:pointer}
+dialog::backdrop{background:rgba(0,0,0,.3)}
+.tabslist{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+.tabrow{display:flex;gap:6px;align-items:center;font-size:12px}
+.tabrow img{width:14px;height:14px}
+.tabrow button{margin-left:auto}
+
+.raise-toast{position:relative;background:#fff;border:1px solid #e6e9ef;border-radius:10px;padding:8px 10px;box-shadow:0 6px 16px rgba(0,0,0,.12);margin-bottom:8px;min-width:260px}
+.raise-toast .meta{font-size:12px;color:#555}
+#raiseTray{position:fixed;right:16px;top:16px;z-index:99999;display:flex;flex-direction:column;align-items:flex-end}
+</style>
+</head>
+<body>
+<div id="raiseTray"></div>
+<nav class="toolbar">
+  <b>Classroom</b><span style="margin-left:auto"></span>
+  <button class="btn" id="focusBtn">Focus</button>
+  <button class="btn" id="pauseBtn">Lock</button>
+  <button class="btn" id="announceBtn">Announcement</button>
+  <button class="btn" id="notifyBtn">Notify</button>
+  <button class="btn" id="openTabsBtn">Open Tabs</button>
+  <button class="btn" id="examBtn">Exam Mode</button>
+  <button class="btn" id="pollBtn">Poll</button>
+</nav>
+
+<section class="toolbar">
+  <label><input id="active" type="checkbox" checked> Active</label>
+  <label><input id="chatEnabled" type="checkbox" checked> Chat</label>
+  <label><input id="focus" type="checkbox"> Focus (allow-only)</label>
+  <label><input id="paused" type="checkbox"> Lock Internet</label>
+  <button class="btn" id="saveClass">Apply</button>
+</section>
+
+<section class="toolbar" style="flex-direction:column;align-items:stretch;gap:12px">
+  <h4>Teacher Block / Allow Lists</h4>
+  <label>Teacher Blocklist (→ G_schools_Teacher_block)<textarea id="teacherBlocks" rows="4" placeholder="*://*.youtube.com/*"></textarea></label>
+  <label>Teacher Allow-only List (Focus → Zerotrust)<textarea id="teacherAllow" rows="4" placeholder="*://*.wikipedia.org/*"></textarea></label>
+  <button class="btn" id="saveLists">Save Lists</button>
+</section>
+
+<section><div class="grid" id="screenGrid"></div></section>
+
+<dialog id="studentDlg">
+  <h4 id="dlgTitle">Student</h4>
+  <img id="dlgShot" class="shot" src="">
+  <div class="tabslist" id="dlgTabs"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+    <button class="btn" id="dlgClose">Close</button>
+  </div>
+</dialog>
+
+<!-- Open Tabs Modal -->
+<dialog id="openTabsDlg">
+  <h4>Open Tabs on Students</h4>
+  <textarea id="openTabsInput" rows="4" placeholder="Enter one URL per line"></textarea>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+    <button class="btn" id="openTabsSend">Send</button>
+    <button class="btn" id="openTabsClose">Cancel</button>
+  </div>
+</dialog>
+
+<!-- Raise Hand Panel -->
+<div id="raiseHandPanel" style="display:none"></div>
+
+<script>
+async function loadData(){
+  const j=await (await fetch('/api/data')).json();
+  focus.checked=j.classes.period1.focus_mode; paused.checked=j.classes.period1.paused;
+  chatEnabled.checked=j.settings.chat_enabled; active.checked=j.classes.period1.active;
+  teacherBlocks.value=(j.classes.period1.teacher_blocks||[]).join('\n');
+  teacherAllow.value=(j.classes.period1.allowlist||[]).join('\n');
+}
+loadData();
+
+saveClass.onclick=async()=>{
+  await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'focus_mode',value:focus.checked})});
+  await fetch('/api/class/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({class_id:'period1',key:'paused',value:paused.checked})});
+  await fetch('/api/class/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:active.checked, chat_enabled:chatEnabled.checked})});
+  alert('Updated');
+};
+
+announceBtn.onclick=async()=>{ 
+  const msg=prompt('Announcement'); 
+  if(msg!=null){ 
+    await fetch('/api/announce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}); 
+    alert('Sent'); 
+  } 
+};
+
+focusBtn.onclick=()=>{ focus.checked=!focus.checked; saveClass.click(); };
+pauseBtn.onclick=()=>{ paused.checked=!paused.checked; saveClass.click(); };
+
+saveLists.onclick=async()=>{
+  const teacher_blocks = teacherBlocks.value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const allowlist = teacherAllow.value.split('\n').map(s=>s.trim()).filter(Boolean);
+  await fetch('/api/class/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({teacher_blocks, allowlist})});
+  alert('Lists saved');
+};
+
+async function refreshPresence(){
+  const res = await fetch('/api/presence'); if(!res.ok) return;
+  const pres = await res.json();
+  const grid = document.getElementById('screenGrid'); grid.innerHTML='';
+  Object.entries(pres).forEach(([student, info])=>{
+    const card=document.createElement('div'); card.className='card';
+    const shot=document.createElement('img'); shot.className='shot'; shot.src = info.screenshot || ''; card.appendChild(shot);
+    const name=document.createElement('div'); name.innerHTML='<b>'+student+'</b>'; card.appendChild(name);
+    const meta=document.createElement('div'); meta.className='mini'; meta.textContent=(info.tab&&info.tab.title)||''; card.appendChild(meta);
+    const bar=document.createElement('div'); bar.style.display='flex'; bar.style.gap='6px'; bar.style.marginTop='6px';
+    const viewBtn=document.createElement('button'); viewBtn.className='btn'; viewBtn.textContent='View'; bar.appendChild(viewBtn);
+    card.appendChild(bar);
+    viewBtn.onclick=()=> openStudent(student, info);
+    grid.appendChild(card);
+  });
+}
+refreshPresence(); setInterval(refreshPresence, 8000);
+
+const dlg=document.getElementById('studentDlg'); dlgClose.onclick=()=> dlg.close();
+function openStudent(student, info){
+  dlg.showModal();
+  dlgTitle.textContent=student; dlgShot.src=info.screenshot||'';
+  const list=dlgTabs; list.innerHTML='';
+  const tabshots=info.tabshots||{};
+  (info.tabs||[]).forEach(t=>{
+    const row=document.createElement('div'); row.className='tabrow';
+    const ico=document.createElement('img'); ico.src=t.favIconUrl||''; row.appendChild(ico);
+    const span=document.createElement('span'); span.textContent=t.title||t.url||''; row.appendChild(span);
+    const cap=document.createElement('button'); cap.className='btn'; cap.textContent='Capture'; row.appendChild(cap);
+    const x=document.createElement('button'); x.className='btn'; x.textContent='✖'; row.appendChild(x);
+    if(tabshots[t.id]){ const img=document.createElement('img'); img.src=tabshots[t.id]; img.style.maxWidth='100%'; img.style.border='1px solid #ccc'; img.style.borderRadius='6px'; img.style.margin='6px 0'; row.appendChild(img); }
+    list.appendChild(row);
+    cap.onclick=async()=>{ await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student, command:{type:'screencap', tabId:t.id}})}); setTimeout(refreshPresence,1500); };
+    x.onclick=async()=>{ await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({student, command:{type:'close_tabs', pattern:(t.url||'*').replace(/[#?].*$/,'*')}})}); setTimeout(refreshPresence,1200); };
+  });
+}
+
+// ---------- Open Tabs modal ----------
+const openTabsDlg=document.getElementById('openTabsDlg');
+const openTabsBtn=document.getElementById('openTabsBtn');
+const openTabsSend=document.getElementById('openTabsSend');
+const openTabsClose=document.getElementById('openTabsClose');
+
+openTabsBtn.onclick=()=> openTabsDlg.showModal();
+openTabsClose.onclick=()=> openTabsDlg.close();
+
+openTabsSend.onclick=async()=>{
+  const urls=openTabsInput.value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!urls.length){ alert('Enter at least one URL'); return; }
+  await fetch('/api/open_tabs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls})});
+  alert('Tabs opened on students');
+  openTabsDlg.close();
+};
+
+// ----- Raise Hand handling -----
+async function loadRaiseHands(){
+  try{
+    const res = await fetch('/api/raise_hand');
+    if(!res.ok) return;
+    const data = await res.json(); // {hands:[{id,name}]}
+    const panel=document.getElementById('raiseHandPanel');
+    panel.innerHTML="";
+    if(!data.hands || !data.hands.length){
+      panel.style.display="none"; return;
+    }
+    panel.style.display="block";
+    data.hands.forEach(h=>{
+      const row=document.createElement("div");
+      row.className="raiseRow";
+      row.textContent=h.name||h.id||"Unknown";
+      const btn=document.createElement("button");
+      btn.textContent="✕";
+      btn.onclick=async()=>{
+        await fetch('/api/raise_hand/clear',{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:h.id})});
+        loadRaiseHands();
+      };
+      row.appendChild(btn);
+      panel.appendChild(row);
+    });
+  }catch(e){}
+}
+setInterval(loadRaiseHands,5000); loadRaiseHands();
+
+// ---- Raise hand tray ----
+const raiseTray = document.getElementById('raiseTray');
+let seenHands = new Set();
+async function pollHands(){
+  try{
+    const r = await fetch('/api/raise_hand'); if(!r.ok) return;
+    const j = await r.json();
+    const hands = j.hands||[];
+    hands.forEach(h=>{
+      const key = String(h.ts||'0');
+      if(seenHands.has(key)) return;
+      seenHands.add(key);
+      const card=document.createElement('div'); card.className='raise-toast';
+      const who = (h.student||'Unknown').trim()||'Unknown';
+      const note = h.note||'';
+      card.innerHTML = '<b>✋ '+escapeHtml(who)+'</b>' + (note ? '<div class="meta">'+escapeHtml(note)+'</div>':'');
+      const x=document.createElement('button'); x.textContent='Dismiss'; x.className='btn'; x.style.cssText='margin-left:8px;padding:4px 8px';
+      x.onclick = async ()=>{ try{ await fetch('/api/raise_hand/clear',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({ts:h.ts, student:h.student})}); }catch(e){} raiseTray.removeChild(card); };
+      const row=document.createElement('div'); row.style.display='flex'; row.style.gap='6px'; row.style.alignItems='center';
+      const left=document.createElement('div'); left.style.flex='1 1 auto'; left.innerHTML = card.innerHTML; card.innerHTML=''; row.appendChild(left); row.appendChild(x); card.appendChild(row);
+      raiseTray.appendChild(card);
+    });
+  }catch(e){}
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+setInterval(pollHands, 3000);
+pollHands();
+
+// ---- Notify button ----
+const notifyBtn = document.getElementById('notifyBtn');
+if(notifyBtn){
+  notifyBtn.onclick = async ()=>{
+    const title = prompt('Notification title', 'Look at the teacher');
+    if(title===null) return;
+    const message = prompt('Message (optional)','Please look up at the teacher now.');
+    await fetch('/api/notify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title, message})});
+    alert('Notification sent');
+  };
+}
+
+</script>
+
+<dialog id="examDlg">
+  <h4>Exam Mode</h4>
+  <input id="examUrl" placeholder="https://exam.example.com" style="width:100%;padding:8px;border:1px solid #e2e2e2;border-radius:8px">
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+    <button class="btn" id="examStart">Start</button>
+    <button class="btn" id="examEnd">End</button>
+    <button class="btn" id="examClose">Close</button>
+  </div>
+</dialog>
+
+<dialog id="pollDlg">
+  <h4>Create Poll</h4>
+  <input id="pollQuestion" placeholder="Question" style="width:100%;padding:8px;border:1px solid #e2e2e2;border-radius:8px">
+  <textarea id="pollOptions" rows="4" placeholder="One option per line" style="width:100%;padding:8px;border:1px solid #e2e2e2;border-radius:8px"></textarea>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+    <button class="btn" id="pollSend">Send</button>
+    <button class="btn" id="pollClose">Close</button>
+  </div>
+</dialog>
+
+<script>
+(function(){
+  const examBtn = document.getElementById('examBtn');
+  const pollBtn = document.getElementById('pollBtn');
+  const examDlg = document.getElementById('examDlg');
+  const pollDlg = document.getElementById('pollDlg');
+  const examStart = document.getElementById('examStart');
+  const examEnd = document.getElementById('examEnd');
+  const examClose = document.getElementById('examClose');
+  const pollSend = document.getElementById('pollSend');
+  const pollClose = document.getElementById('pollClose');
+
+  if(examBtn){ examBtn.onclick = ()=> examDlg.showModal(); }
+  if(examClose){ examClose.onclick = ()=> examDlg.close(); }
+  if(examStart){
+    examStart.onclick = async ()=>{
+      const url = (document.getElementById('examUrl').value||'').trim();
+      if(!url){ alert('Enter Exam URL'); return; }
+      await fetch('/api/exam', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'start', url})});
+      alert('Exam started');
+      examDlg.close();
+    };
+  }
+  if(examEnd){
+    examEnd.onclick = async ()=>{
+      await fetch('/api/exam', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'end'})});
+      alert('Exam ended');
+      examDlg.close();
+    };
+  }
+
+  if(pollBtn){ pollBtn.onclick = ()=> pollDlg.showModal(); }
+  if(pollClose){ pollClose.onclick = ()=> pollDlg.close(); }
+  if(pollSend){
+    pollSend.onclick = async ()=>{
+      const q = (document.getElementById('pollQuestion').value||'').trim();
+      const opts = (document.getElementById('pollOptions').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+      if(!q || !opts.length){ alert('Question and at least one option'); return; }
+      const res = await fetch('/api/poll', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q, options:opts})});
+      if(res.ok){ alert('Poll sent'); pollDlg.close(); } else { alert('Failed to send poll'); }
+    };
+  }
+})();
+
+// ---- Raise hand tray ----
+const raiseTray = document.getElementById('raiseTray');
+let seenHands = new Set();
+async function pollHands(){
+  try{
+    const r = await fetch('/api/raise_hand'); if(!r.ok) return;
+    const j = await r.json();
+    const hands = j.hands||[];
+    hands.forEach(h=>{
+      const key = String(h.ts||'0');
+      if(seenHands.has(key)) return;
+      seenHands.add(key);
+      const card=document.createElement('div'); card.className='raise-toast';
+      const who = (h.student||'Unknown').trim()||'Unknown';
+      const note = h.note||'';
+      card.innerHTML = '<b>✋ '+escapeHtml(who)+'</b>' + (note ? '<div class="meta">'+escapeHtml(note)+'</div>':'');
+      const x=document.createElement('button'); x.textContent='Dismiss'; x.className='btn'; x.style.cssText='margin-left:8px;padding:4px 8px';
+      x.onclick = async ()=>{ try{ await fetch('/api/raise_hand/clear',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({ts:h.ts, student:h.student})}); }catch(e){} raiseTray.removeChild(card); };
+      const row=document.createElement('div'); row.style.display='flex'; row.style.gap='6px'; row.style.alignItems='center';
+      const left=document.createElement('div'); left.style.flex='1 1 auto'; left.innerHTML = card.innerHTML; card.innerHTML=''; row.appendChild(left); row.appendChild(x); card.appendChild(row);
+      raiseTray.appendChild(card);
+    });
+  }catch(e){}
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+setInterval(pollHands, 3000);
+pollHands();
+
+// ---- Notify button ----
+const notifyBtn = document.getElementById('notifyBtn');
+if(notifyBtn){
+  notifyBtn.onclick = async ()=>{
+    const title = prompt('Notification title', 'Look at the teacher');
+    if(title===null) return;
+    const message = prompt('Message (optional)','Please look up at the teacher now.');
+    await fetch('/api/notify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({title, message})});
+    alert('Notification sent');
+  };
+}
+
+</script>
+</body></html>

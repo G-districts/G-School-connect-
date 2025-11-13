@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Presentation</title>
+  <style>
+    html,body{height:100%}
+    body{margin:0;display:flex;align-items:center;justify-content:center;background:#0b1b34;color:#e5ecff;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+    .card{background:#0f172a;border:1px solid #1e293b;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:16px;max-width:1100px;width:96vw}
+    video{width:100%;max-height:80vh;background:#000;border-radius:12px}
+    .empty{display:none;align-items:center;justify-content:center;gap:12px;padding:32px;border:2px dashed #334155;border-radius:12px;background:#111827;color:#cbd5e1}
+    .empty.show{display:flex}
+    .empty h2{margin:0;font-size:18px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <video id="v" autoplay playsinline controls></video>
+    <div id="empty" class="empty">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8h12M6 12h12M6 16h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <div>
+        <h2>Teacher has stopped presenting — you can close this tab.</h2>
+        <div style="font-size:13px;opacity:.8">Waiting for presentation to start…</div>
+      </div>
+    </div>
+  </div>
+<script>
+const room = "{{ room }}";
+const base = window.location.origin;
+const video = document.getElementById('v');
+const empty = document.getElementById('empty');
+const ICE = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
+
+let pc = null;
+let client_id = crypto.randomUUID();
+
+function showEmpty(show){ empty.className = 'empty' + (show ? ' show' : ''); }
+
+async function start(){
+  showEmpty(true);
+  pc = new RTCPeerConnection(ICE);
+  pc.ontrack = ev => {
+    video.srcObject = ev.streams[0];
+    showEmpty(false);
+  };
+  // Send viewer ICE to server
+  pc.onicecandidate = async (ev) => {
+    if (ev.candidate){
+      await fetch(`${base}/api/present/${room}/candidate/viewer/${client_id}`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ candidates: [ev.candidate] })
+      });
+    }
+  };
+  // We only want to receive
+  pc.addTransceiver('video', { direction: 'recvonly' });
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await fetch(`${base}/api/present/${room}/viewer/offer`, {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ client_id, sdp: pc.localDescription })
+  });
+
+  // Poll for teacher answer
+  const ansTimer = setInterval(async () => {
+    const r = await fetch(`${base}/api/present/${room}/answer/${client_id}`);
+    const j = await r.json();
+    if (j.answer){
+      clearInterval(ansTimer);
+      await pc.setRemoteDescription(j.answer);
+      // Start ICE polling (teacher -> viewer)
+      const icePoll = setInterval(async () => {
+        if (pc.connectionState === 'closed') { clearInterval(icePoll); return; }
+        const r2 = await fetch(`${base}/api/present/${room}/candidate/viewer/${client_id}`);
+        const j2 = await r2.json();
+        (j2.candidates || []).forEach(async c => {
+          try { await pc.addIceCandidate(c); } catch(e){ console.warn(e); }
+        });
+      }, 1200);
+    }
+  }, 1000);
+}
+
+start().catch(err => {
+  console.error(err);
+  showEmpty(true);
+});
+
+// Show stop screen when stream ends
+video.addEventListener('ended', () => showEmpty(true));
+</script>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js" crossorigin="anonymous"></script>
+<script>
+const nsp = (() => { try { return io('/present', { transports: ['websocket','polling'] }); } catch(e){ return null; } })();
+var client_id_global = client_id;
+if (nsp){
+  nsp.emit('join', { room });
+  nsp.on('teacher:answer', async ({client_id, sdp}) => {
+    if (client_id !== client_id_global) return;
+    try { await pc.setRemoteDescription(sdp); } catch(e){}
+  });
+  nsp.on('ice:teacher', async ({client_id, candidate}) => {
+    if (client_id !== client_id_global) return;
+    if (candidate){ try { await pc.addIceCandidate(candidate); } catch(e){} }
+  });
+}
+</script>
+</body>
+</html>
