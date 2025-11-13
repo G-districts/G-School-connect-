@@ -1,0 +1,204 @@
+{
+  "categories": {
+    "Advertising": {
+      "domains": [
+        "doubleclick.net",
+        "ads.google.com",
+        "adservice.google.com",
+        "googlesyndication.com",
+        "adroll.com",
+        "taboola.com",
+        "outbrain.com",
+        "criteo.com",
+        "rubiconproject.com",
+        "pubmatic.com",
+        "*.adnxs.com",
+        "ads.yahoo.com",
+        "advertising.microsoft.com",
+        "moat.com",
+        "quantserve.com"
+      ]
+    },
+    "AI Chatbots & Tools": {
+      "domains": [
+        "chat.openai.com",
+        "openai.com",
+        "bard.google.com",
+        "gemini.google.com",
+        "claude.ai",
+        "perplexity.ai",
+        "huggingface.co",
+        "poe.com",
+        "character.ai",
+        "quora.com"
+      ]
+    },
+    "App Stores & System Updates": {
+      "domains": [
+        "play.google.com",
+        "apps.apple.com",
+        "itunes.apple.com",
+        "store.steampowered.com",
+        "microsoft.com",
+        "store.microsoft.com"
+      ]
+    },
+    "Blogs": {
+      "domains": [
+        "wordpress.com",
+        "blogger.com",
+        "medium.com",
+        "wattpad.com",
+        "joomla.org",
+        "drupal.org"
+      ]
+    },
+    "Collaboration": {
+      "domains": [
+        "gmail.com",
+        "mail.google.com",
+        "outlook.com",
+        "office.com",
+        "teams.microsoft.com",
+        "zoom.us",
+        "meet.google.com",
+        "slack.com",
+        "drive.google.com",
+        "onedrive.live.com"
+      ]
+    },
+    "Drugs & Alcohol": {
+      "domains": [
+        "weedmaps.com",
+        "leafly.com",
+        "drizly.com",
+        "wine.com",
+        "beeradvocate.com"
+      ]
+    },
+    "Ecommerce": {
+      "domains": [
+        "amazon.com",
+        "ebay.com",
+        "walmart.com",
+        "etsy.com",
+        "bestbuy.com",
+        "newegg.com"
+      ]
+    },
+    "Entertainment": {
+      "domains": [
+        "imdb.com",
+        "rottentomatoes.com",
+        "fandom.com",
+        "nick.com",
+        "cartoonnetwork.com"
+      ]
+    },
+    "Gambling": {
+      "domains": [
+        "bet365.com",
+        "draftkings.com",
+        "fanduel.com",
+        "pokerstars.com",
+        "williamhill.com"
+      ]
+    },
+    "Games": {
+      "domains": [
+        "roblox.com",
+        "epicgames.com",
+        "steampowered.com",
+        "xbox.com",
+        "playstation.com",
+        "miniclip.com"
+      ]
+    },
+    "General / Education": {
+      "domains": [
+        "wikipedia.org",
+        "nasa.gov",
+        "britannica.com",
+        "khanacademy.org",
+        "ed.gov"
+      ]
+    },
+    "Health & Medicine": {
+      "domains": [
+        "fitbit.com",
+        "apple.com/health",
+        "myfitnesspal.com",
+        "healthline.com"
+      ]
+    },
+    "Illegal, Malicious, or Hacking": {
+      "domains": [
+        "piratebay.org",
+        "1337x.to",
+        "cracking.org",
+        "hackforums.net",
+        "proxynova.com"
+      ]
+    },
+    "Religion": {
+      "domains": [
+        "bible.com",
+        "churchofjesuschrist.org",
+        "jewishvirtuallibrary.org",
+        "islamicity.org"
+      ]
+    },
+    "Sexual Content": {
+      "domains": [
+        "pornhub.com",
+        "xnxx.com",
+        "xvideos.com",
+        "onlyfans.com",
+        "chaturbate.com"
+      ]
+    },
+    "Social Media": {
+      "domains": [
+        "instagram.com",
+        "tiktok.com",
+        "snapchat.com",
+        "facebook.com",
+        "twitter.com",
+        "reddit.com",
+        "discord.com"
+      ]
+    },
+    "Sports & Hobbies": {
+      "domains": [
+        "espn.com",
+        "mlb.com",
+        "nba.com",
+        "nfl.com",
+        "nhl.com",
+        "cars.com",
+        "boattrader.com"
+      ]
+    },
+    "Streaming Services": {
+      "domains": [
+        "youtube.com",
+        "netflix.com",
+        "hulu.com",
+        "twitch.tv",
+        "spotify.com",
+        "vimeo.com"
+      ]
+    },
+    "Weapons": {
+      "domains": [
+        "guns.com",
+        "brownells.com",
+        "midwayusa.com",
+        "cheaperthandirt.com"
+      ]
+    },
+    "Uncategorized": {
+      "domains": []
+    }
+  }
+}
