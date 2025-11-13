@@ -269,120 +269,6 @@ def logout():
     return redirect(url_for("login_page"))
 
 
-
-# =========================
-# Teacher Presentation (WebRTC signaling via REST polling)
-# =========================
-
-from datetime import datetime
-from collections import defaultdict
-
-# In-memory session store: {room: {offers:{client_id: sdp}, answers:{client_id:sdp}, cand_v:{client_id:[cands]}, cand_t:{client_id:[cands]}, updated:int, active:bool}}
-PRESENT = defaultdict(lambda: {"offers": {}, "answers": {}, "cand_v": defaultdict(list), "cand_t": defaultdict(list), "updated": int(time.time()), "active": False})
-
-def _clean_room(room):
-    r = PRESENT.get(room)
-    if not r: return
-    # drop stale viewers (> 10 minutes inactivity)
-    now = int(time.time())
-    for cid in list(r["offers"].keys()):
-        # if no answer & offer older than 10 min, drop
-        pass
-    r["updated"] = now
-
-@app.route("/teacher/present")
-def teacher_present_page():
-    u = session.get("user")
-    if not u:
-        return redirect(url_for("login_page"))
-    # room id based on teacher email (stable across session)
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', (u.get("email") or "classroom").split("@")[0])
-    return render_template("teacher_present.html", data=load_data(), user=u, room=room)
-
-@app.route("/present/<room>")
-def student_present_view(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    return render_template("present.html", room=room)
-
-@app.route("/api/present/<room>/start", methods=["POST"])
-def api_present_start(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    PRESENT[room]["active"] = True
-    PRESENT[room]["updated"] = int(time.time())
-    return jsonify({"ok": True, "room": room})
-
-@app.route("/api/present/<room>/end", methods=["POST"])
-def api_present_end(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    PRESENT[room] = {"offers": {}, "answers": {}, "cand_v": defaultdict(list), "cand_t": defaultdict(list), "updated": int(time.time()), "active": False}
-    return jsonify({"ok": True})
-
-@app.route("/api/present/<room>/status", methods=["GET"])
-def api_present_status(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    r = PRESENT.get(room) or {}
-    return jsonify({"ok": True, "active": bool(r.get("active"))})
-
-# Viewer posts offer and polls for answer
-@app.route("/api/present/<room>/viewer/offer", methods=["POST"])
-def api_present_viewer_offer(room):
-    body = request.json or {}
-    sdp = body.get("sdp")
-    client_id = body.get("client_id") or str(uuid.uuid4())
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    r = PRESENT[room]
-    r["offers"][client_id] = sdp
-    r["updated"] = int(time.time())
-    return jsonify({"ok": True, "client_id": client_id})
-
-@app.route("/api/present/<room>/offers", methods=["GET"])
-def api_present_offers(room):
-    # Teacher polls for pending offers
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    offers = PRESENT[room]["offers"]
-    return jsonify({"ok": True, "offers": offers})
-
-@app.route("/api/present/<room>/answer/<client_id>", methods=["POST", "GET"])
-def api_present_answer(room, client_id):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
-    r = PRESENT[room]
-    if request.method == "POST":
-        body = request.json or {}
-        sdp = body.get("sdp")
-        r["answers"][client_id] = sdp
-        # once answered, remove offer (optional)
-        if client_id in r["offers"]:
-            del r["offers"][client_id]
-        r["updated"] = int(time.time())
-        return jsonify({"ok": True})
-    else:
-        ans = r["answers"].get(client_id)
-        return jsonify({"ok": True, "answer": ans})
-
-# ICE candidates (trickle)
-@app.route("/api/present/<room>/candidate/<side>/<client_id>", methods=["POST", "GET"])
-def api_present_candidate(room, side, client_id):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
-    side = "viewer" if side.lower().startswith("v") else "teacher"
-    r = PRESENT[room]
-    bucket_from = r["cand_v"] if side == "viewer" else r["cand_t"]
-    bucket_to   = r["cand_t"] if side == "viewer" else r["cand_v"]
-    if request.method == "POST":
-        body = request.json or {}
-        cands = body.get("candidates") or []
-        if cands:
-            bucket_from[client_id].extend(cands)
-        r["updated"] = int(time.time())
-        return jsonify({"ok": True})
-    else:
-        # GET fetch and clear incoming candidates for this side
-        cands = bucket_to.get(client_id, [])
-        bucket_to[client_id] = []
-        return jsonify({"ok": True, "candidates": cands})
-
-
 # =========================
 # Auth
 # =========================
@@ -1590,3 +1476,30 @@ if __name__ == "__main__":
     # Ensure data.json exists and is sane on boot
     save_data(ensure_keys(load_data()))
     app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+# =========================
+# Off-task alert (student)
+# =========================
+@app.route("/api/off_task", methods=["POST"])
+def api_off_task():
+    try:
+        b = request.json or {}
+        student = (b.get("student") or "").strip()
+        url = (b.get("url") or "").strip()
+        reason = (b.get("reason") or "blocked_visit")
+        # Append to timeline log (reuse existing log_action)
+        log_action({"event": "off_task", "student": student, "url": url, "reason": reason, "ts": int(time.time())})
+        # Optionally push a notify to teacher UI
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Off‑task detected",
+            "message": f"{student or 'Student'} visited a blocked page."
+        })
+        save_data(d)
+        return jsonify({"ok": True})
+    except Exception as e:
+        try: log_action({"event": "off_task_error", "error": str(e)})
+        except: pass
+        return jsonify({"ok": False}), 500
