@@ -1,0 +1,399 @@
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask_cors import CORS
+import json, os, time, sqlite3
+
+app = Flask(__name__, static_url_path="/static", static_folder="static", template_folder="templates")
+app.secret_key = os.environ.get("SECRET_KEY","dev_secret_key")
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+ROOT = os.path.dirname(__file__)
+DATA_PATH = os.path.join(ROOT, "data.json")
+DB_PATH = os.path.join(ROOT, "gschool.db")
+
+def db():
+    return sqlite3.connect(DB_PATH)
+
+def load_data():
+    with open(DATA_PATH,"r") as f: return json.load(f)
+
+def save_data(d):
+    with open(DATA_PATH,"w") as f: json.dump(d,f,indent=2)
+
+def current_user(): return session.get("user")
+
+# ---------- Pages ----------
+@app.route("/")
+def index():
+    u=current_user()
+    if not u: return redirect(url_for("login_page"))
+    return redirect(url_for("teacher_page" if u["role"]!="admin" else "admin_page"))
+
+@app.route("/login")
+def login_page():
+    return render_template("login.html")
+
+@app.route("/admin")
+def admin_page():
+    u=current_user()
+    if not u or u["role"]!="admin": return redirect(url_for("login_page"))
+    return render_template("admin.html", data=load_data(), user=u)
+
+@app.route("/teacher")
+def teacher_page():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return redirect(url_for("login_page"))
+    return render_template("teacher.html", data=load_data(), user=u)
+
+@app.route("/logout")
+def logout():
+    session.pop("user",None); return redirect(url_for("login_page"))
+
+# ---------- Auth ----------
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    body = request.json or request.form
+    email = (body.get("email") or "").strip().lower()
+    pw = body.get("password") or ""
+    con=db(); cur=con.cursor()
+    cur.execute("SELECT email,role FROM users WHERE email=? AND password=?", (email,pw))
+    row = cur.fetchone()
+    con.close()
+    if row:
+        session["user"]={"email":row[0],"role":row[1]}
+        return jsonify({"ok":True,"role":row[1]})
+    return jsonify({"ok":False,"error":"Invalid credentials"}),401
+
+# ---------- Settings ----------
+@app.route("/api/data")
+def api_data():
+    return jsonify(load_data())
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings():
+    u=current_user()
+    if not u or u["role"]!="admin": return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); b=request.json or {}
+    if "blocked_redirect" in b: d["settings"]["blocked_redirect"]=b["blocked_redirect"]
+    if "chat_enabled" in b: d["settings"]["chat_enabled"]=bool(b["chat_enabled"])
+    if "passcode" in b and b["passcode"]: d["settings"]["passcode"]=b["passcode"]
+    save_data(d); return jsonify({"ok":True,"settings":d["settings"]})
+
+@app.route("/api/categories", methods=["POST"])
+def api_categories():
+    u=current_user()
+    if not u or u["role"]!="admin": return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); b=request.json or {}
+    name=b.get("name"); urls=b.get("urls",[]); bp=b.get("blockPage","")
+    if not name: return jsonify({"ok":False,"error":"name required"}),400
+    d["categories"][name]={"urls":urls,"blockPage":bp}; save_data(d); return jsonify({"ok":True})
+
+@app.route("/api/categories/delete", methods=["POST"])
+def api_categories_delete():
+    u=current_user()
+    if not u or u["role"]!="admin": return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); name=(request.json or {}).get("name")
+    if name in d["categories"]: del d["categories"][name]; save_data(d)
+    return jsonify({"ok":True})
+
+# ---------- Teacher/Admin Actions ----------
+@app.route("/api/announce", methods=["POST"])
+def api_announce():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); d["announcements"]=(request.json or {}).get("message","")
+    save_data(d); return jsonify({"ok":True})
+
+@app.route("/api/class/toggle", methods=["POST"])
+def api_class_toggle():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); b=request.json or {}
+    cid=b.get("class_id","period1"); key=b.get("key"); val=bool(b.get("value"))
+    if cid in d["classes"] and key in ("focus_mode","paused"):
+        d["classes"][cid][key]=val; save_data(d); return jsonify({"ok":True,"class":d["classes"][cid]})
+    return jsonify({"ok":False,"error":"invalid"}),400
+
+@app.route("/api/class/set", methods=["POST"])
+def api_class_set():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    d = load_data()
+    b = request.json or {}
+    cls = d["classes"].get("period1", {})
+
+    prev_active = bool(cls.get("active", True))
+
+    # update class session state
+    if "active" in b:
+        cls["active"] = bool(b["active"])
+    if "chat_enabled" in b:
+        d["settings"]["chat_enabled"] = bool(b["chat_enabled"])
+    if "passcode" in b and b["passcode"]:
+        d["settings"]["passcode"] = b["passcode"]
+
+    # 🔹 Persist Always Allowed / Always Blocked URLs
+    if "teacher_blocks" in b:
+        cls["teacher_blocks"] = list(b["teacher_blocks"])  # overwrite with new list
+    else:
+        cls.setdefault("teacher_blocks", [])  # ensure key exists
+
+    if "allowlist" in b:
+        cls["allowlist"] = list(b["allowlist"])
+    else:
+        cls.setdefault("allowlist", [])
+
+    d["classes"]["period1"] = cls
+
+    # notify students when session becomes active
+    if bool(cls.get("active", True)) and not prev_active:
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Class session is active",
+            "message": "Please join and stay until dismissed."
+        })
+
+    save_data(d)
+    return jsonify({"ok": True, "class": cls, "settings": d["settings"]})
+
+
+@app.route("/api/command", methods=["POST"])
+def api_command():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return jsonify({"ok":False,"error":"forbidden"}),403
+    d=load_data(); b=request.json or {}
+    target=b.get("student") or "*"; cmd=b.get("command")
+    if not cmd or "type" not in cmd: return jsonify({"ok":False,"error":"invalid"}),400
+    d["pending_commands"].setdefault(target,[]); d["pending_commands"][target].append(cmd)
+    save_data(d); return jsonify({"ok":True})
+
+@app.route("/api/commands/<student>")
+def api_commands(student):
+    d=load_data()
+    cmds=d["pending_commands"].get(student, []) + d["pending_commands"].get("*", [])
+    d["pending_commands"][student]=[]; d["pending_commands"]["*"]=[]
+    save_data(d); return jsonify({"commands":cmds})
+
+@app.route("/api/heartbeat", methods=["POST"])
+def api_heartbeat():
+    b=request.json or {}
+    student=(b.get("student") or "").strip()
+    d=load_data()
+    d.setdefault("presence",{})
+    if student:
+        pres=d["presence"].setdefault(student, {})
+        pres["last_seen"]=int(time.time())
+        pres["student_name"]=b.get("student_name","")
+        pres["tab"]=b.get("tab",{})
+        pres["tabs"]=b.get("tabs",[])
+        pres["screenshot"]=b.get("screenshot","")
+        shots=pres.get("tabshots",{})
+        for k,v in (b.get("tabshots",{}) or {}).items(): shots[str(k)]=v
+        open_ids=set([str(t.get("id")) for t in pres["tabs"] if "id" in t])
+        for k in list(shots.keys()):
+            if k not in open_ids: del shots[k]
+        pres["tabshots"]=shots
+        d["presence"][student]=pres
+        save_data(d)
+    return jsonify({"ok":True})
+
+@app.route("/api/presence")
+def api_presence():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return jsonify({"ok":False,"error":"forbidden"}),403
+    return jsonify(load_data().get("presence",{}))
+
+
+@app.route("/api/policy", methods=["POST"])
+def api_policy():
+    b=request.json or {}; student=(b.get("student") or "").strip()
+    d=load_data()
+    cls=d["classes"]["period1"]
+    focus=cls["focus_mode"]; paused=cls["paused"]
+    ov=d.get("student_overrides",{}).get(student,{})
+    focus=ov.get("focus_mode",focus); paused=ov.get("paused",paused)
+    return jsonify({
+        "blocked_redirect": d["settings"]["blocked_redirect"],
+        "categories": d["categories"],
+        "focus_mode": focus,
+        "paused": paused,
+        "announcement": d["announcements"],
+        "class": {"id":"period1","name":cls.get("name","Period 1"),"active":bool(cls.get("active",True))},
+        "allowlist": cls.get("allowlist", []),
+        "teacher_blocks": cls.get("teacher_blocks", []),
+        "chat_enabled": d.get("settings",{}).get("chat_enabled", False),
+        "ts": int(time.time())
+    })
+
+# ---------- Chat ----------
+@app.route("/api/chat/<class_id>", methods=["GET","POST"])
+def api_chat(class_id):
+    d=load_data(); d.setdefault("chat",{}).setdefault(class_id,[])
+    if request.method=="POST":
+        b=request.json or {}; txt=(b.get("text") or "")[:500]; sender=b.get("from") or "student"
+        if not txt: return jsonify({"ok":False,"error":"empty"}),400
+        d["chat"][class_id].append({"from":sender,"text":txt,"ts":int(time.time())})
+        d["chat"][class_id]=d["chat"][class_id][-200:]; save_data(d); return jsonify({"ok":True})
+    return jsonify({"enabled": d.get("settings",{}).get("chat_enabled", False), "messages": d["chat"][class_id][-100:]})
+
+# ---------- Raise Hand ----------
+@app.route("/api/raise_hand", methods=["POST"])
+def api_raise_hand():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    note = (b.get("note") or "").strip()
+    d = load_data()
+    d.setdefault("raises", [])
+    d["raises"].append({"student": student, "note": note, "ts": int(time.time())})
+    d["raises"] = d["raises"][-200:]
+    save_data(d)
+    return jsonify({"ok": True})
+
+@app.route("/api/raise_hand", methods=["GET"])
+def get_hands():
+    d = load_data()
+    return jsonify({"hands": d.get("raises", [])})
+
+# ---------- Global Allow/Block Overrides ----------
+@app.route("/api/overrides", methods=["GET"])
+def api_get_overrides():
+    d = load_data()
+    return jsonify({
+        "allowlist": d.get("allowlist", []),
+        "teacher_blocks": d.get("teacher_blocks", [])
+    })
+
+@app.route("/api/overrides", methods=["POST"])
+def api_save_overrides():
+    u = current_user()
+    if not u or u["role"] != "admin":
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = load_data()
+    b = request.json or {}
+    d["allowlist"] = b.get("allowlist", [])
+    d["teacher_blocks"] = b.get("teacher_blocks", [])
+    save_data(d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/raise_hand/clear", methods=["POST"])
+def clear_hand():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    d = load_data()
+    lst = d.get("raises", [])
+    if student:
+        lst = [r for r in lst if r.get("student") != student]
+    else:
+        lst = []
+    d["raises"] = lst
+    save_data(d)
+    return jsonify({"ok": True, "remaining": len(lst)})
+
+# ---------- Poll ----------
+@app.route("/api/poll", methods=["POST"])
+def api_poll():
+    u = current_user()
+    if not u or u["role"] not in ("teacher","admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    q = (body.get("question") or "").strip()
+    opts = [o.strip() for o in (body.get("options") or []) if o and o.strip()]
+    if not q or not opts:
+        return jsonify({"ok": False, "error": "question and options required"}), 400
+    poll_id = "poll_" + str(int(time.time()*1000))
+    d = load_data()
+    d.setdefault("polls", {})[poll_id] = {"question": q, "options": opts, "responses": []}
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "poll", "id": poll_id, "question": q, "options": opts
+    })
+    save_data(d)
+    return jsonify({"ok": True, "poll_id": poll_id})
+
+@app.route("/api/poll_response", methods=["POST"])
+def api_poll_response():
+    b = request.json or {}
+    poll_id = b.get("poll_id")
+    answer = b.get("answer")
+    student = (b.get("student") or "").strip()
+    if not poll_id:
+        return jsonify({"ok": False, "error": "no poll id"}), 400
+    d = load_data()
+    if poll_id not in d.get("polls", {}):
+        return jsonify({"ok": False, "error": "unknown poll"}), 404
+    d["polls"][poll_id].setdefault("responses", []).append({
+        "student": student,
+        "answer": answer,
+        "ts": int(time.time())
+    })
+    save_data(d)
+    return jsonify({"ok": True})
+
+# ---------- Exam ----------
+@app.route("/api/open_tabs", methods=["POST"])
+def api_open_tabs():
+    u = current_user()
+    if not u or u["role"] not in ("teacher","admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    urls = [str(u).strip() for u in (body.get("urls") or []) if str(u).strip()]
+    if not urls:
+        return jsonify({"ok": False, "error": "no urls"}), 400
+    d = load_data()
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "open_tabs","urls": urls
+    })
+    save_data(d)
+    return jsonify({"ok": True, "count": len(urls)})
+
+@app.route("/api/exam", methods=["POST"])
+def api_exam():
+    u = current_user()
+    if not u or u["role"] not in ("teacher","admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    action = body.get("action")
+    d = load_data()
+    if action == "start":
+        url = (body.get("url") or "").strip()
+        if not url:
+            return jsonify({"ok": False, "error": "url required"}), 400
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "exam_start", "url": url
+        })
+        save_data(d)
+        return jsonify({"ok": True})
+    elif action == "end":
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "exam_end"
+        })
+        save_data(d)
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "invalid action"}), 400
+
+# ---------- Notify ----------
+@app.route("/api/notify", methods=["POST"])
+def api_notify():
+    u=current_user()
+    if not u or u["role"] not in ("teacher","admin"): return jsonify({"ok":False,"error":"forbidden"}),403
+    b=request.json or {}
+    title=(b.get("title") or "G School")[:120]
+    message=(b.get("message") or "")[:500]
+    d=load_data()
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type":"notify","title":title,"message":message
+    })
+    save_data(d)
+    return jsonify({"ok":True})
+
+# ---------- AI Blueprint ----------
+try:
+    import ai_routes
+    app.register_blueprint(ai_routes.ai)
+except Exception as _e:
+    print("AI routes not loaded:", _e)
+
+# ---------- Run ----------
+if __name__=="__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,0 +1,41 @@
+{
+  "allowed": [
+    {
+      "id": "1759538335589",
+      "name": "Allow only for class 1",
+      "type": "allowed",
+      "allow": [
+        "*://k12.instructure.com/*"
+      ],
+      "block": [],
+      "icon": "blue",
+      "desc": ""
+    },
+    {
+      "id": "1761180523513",
+      "name": "briskteaching",
+      "type": "allowed",
+      "allow": [
+        "https://app.briskteaching.com/ws/B3FG8C"
+      ],
+      "block": [],
+      "icon": "blue"
+    }
+  ],
+  "blocked": [
+    {
+      "id": "1759537913182",
+      "name": "test",
+      "type": "blocked",
+      "allow": [],
+      "block": [
+        "*://*.youtube.com/*",
+        "*://*.chrome-untrusted://crosh/*"
+      ],
+      "icon": "blue",
+      "desc": ""
+    }
+  ],
+  "current": null,
+  "default_id": null
+}
