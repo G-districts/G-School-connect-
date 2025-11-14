@@ -313,7 +313,13 @@ def teacher_present_page():
         return redirect(url_for("login_page"))
     # room id based on teacher email (stable across session)
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', (u.get("email") or "classroom").split("@")[0])
-    return render_template("teacher_present.html",  data=load_data(, ice_servers=_ice_servers()), user=u, room=room)
+    return render_template(
+        "teacher_present.html",
+        data=load_data(),
+        ice_servers=_ice_servers(),
+        user=u,
+        room=room,
+    )
 
 @app.route("/present/<room>")
 def student_present_view(room):
