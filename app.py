@@ -243,6 +243,7 @@ def index():
     u = current_user()
     if not u:
         return redirect(url_for("login_page"))
+    # Non-admins (teacher/student) → teacher page; admins → admin page
     return redirect(url_for("teacher_page" if u["role"] != "admin" else "admin_page"))
 
 @app.route("/login")
@@ -262,9 +263,16 @@ def teacher_page():
     if not u:
         # keep 'next' so we land back on /teacher after login
         return redirect(url_for("login_page", next="/teacher"))
-    # IMPORTANT: do NOT redirect admins away from /teacher here.
-    # Render the teacher UI for any logged-in teacher/admin.
-    return render_template("teacher.html", data=load_data(), user=u)
+
+    # ⚠️ IMPORTANT FIX:
+    # Some front-end code in teacher.html likely redirects admins to /admin
+    # based on user.role. For the teacher view, we always present the user
+    # as a "teacher" so visiting /teacher does NOT bounce to /admin.
+    user_for_template = dict(u)
+    if user_for_template.get("role") == "admin":
+        user_for_template["role"] = "teacher"
+
+    return render_template("teacher.html", data=load_data(), user=user_for_template)
 
 
 @app.route("/logout")
@@ -1498,7 +1506,7 @@ def api_off_task():
         d = ensure_keys(load_data())
         d.setdefault("pending_commands", {}).setdefault("*", []).append({
             "type": "notify",
-            "title": "Off‑task detected",
+            "title": "Off-task detected",
             "message": f"{student or 'Student'} visited a blocked page."
         })
         save_data(d)
@@ -1507,3 +1515,4 @@ def api_off_task():
         try: log_action({"event": "off_task_error", "error": str(e)})
         except: pass
         return jsonify({"ok": False}), 500
+
