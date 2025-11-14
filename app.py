@@ -243,7 +243,6 @@ def index():
     u = current_user()
     if not u:
         return redirect(url_for("login_page"))
-    # Non-admins (teacher/student) → teacher page; admins → admin page
     return redirect(url_for("teacher_page" if u["role"] != "admin" else "admin_page"))
 
 @app.route("/login")
@@ -260,20 +259,9 @@ def admin_page():
 @app.route("/teacher")
 def teacher_page():
     u = current_user()
-    if not u:
-        # keep 'next' so we land back on /teacher after login
-        return redirect(url_for("login_page", next="/teacher"))
-
-    # ⚠️ IMPORTANT FIX:
-    # Some front-end code in teacher.html likely redirects admins to /admin
-    # based on user.role. For the teacher view, we always present the user
-    # as a "teacher" so visiting /teacher does NOT bounce to /admin.
-    user_for_template = dict(u)
-    if user_for_template.get("role") == "admin":
-        user_for_template["role"] = "teacher"
-
-    return render_template("teacher.html", data=load_data(), user=user_for_template)
-
+    if not u or u["role"] not in ("teacher", "admin"):
+        return redirect(url_for("login_page"))
+    return render_template("teacher.html", data=load_data(), user=u)
 
 @app.route("/logout")
 def logout():
@@ -1472,6 +1460,129 @@ def api_notify():
 
 
 # =========================
+# Presentation (teacher broadcast)
+# =========================
+@app.route("/present")
+def present_student():
+    """Simple presentation viewer for students."""
+    d = ensure_keys(load_data())
+    state = d.get("present_state", {}) or {}
+    return render_template("present.html", state=state, mode="student")
+
+
+@app.route("/present/admin")
+def present_admin():
+    """Teacher view for presentations."""
+    u = current_user()
+    if not u or u.get("role") not in ("teacher", "admin"):
+        return redirect(url_for("login_page", next="/present/admin"))
+    d = ensure_keys(load_data())
+    state = d.get("present_state", {}) or {}
+    return render_template("present.html", state=state, mode="teacher", user=u)
+
+
+@app.route("/api/present/start", methods=["POST"])
+def api_present_start():
+    u = current_user()
+    if not u or u.get("role") not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    d = ensure_keys(load_data())
+    st = d.setdefault("present_state", {})
+    st["active"] = True
+    st["by"] = u.get("email")
+    st["ts"] = int(time.time())
+    d["present_state"] = st
+
+    # Tell all students to open the presentation tab
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "open_present",
+        "url": "https://gschool.gdistrict.org/present"
+    })
+    save_data(d)
+    log_action({"event": "present_start", "by": u.get("email")})
+    return jsonify({"ok": True, "state": st})
+
+
+@app.route("/api/present/stop", methods=["POST"])
+def api_present_stop():
+    u = current_user()
+    if not u or u.get("role") not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    d = ensure_keys(load_data())
+    st = d.setdefault("present_state", {})
+    st["active"] = False
+    st["ts"] = int(time.time())
+    d["present_state"] = st
+
+    # Optionally notify students; the /present page will show 'stopped'
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "close_present"
+    })
+    save_data(d)
+    log_action({"event": "present_stop", "by": u.get("email")})
+    return jsonify({"ok": True, "state": st})
+
+
+@app.route("/api/present/state")
+def api_present_state():
+    d = ensure_keys(load_data())
+    st = d.get("present_state", {}) or {}
+    st.setdefault("active", False)
+    return jsonify({"ok": True, "state": st})
+
+
+# =========================
+# Off-task alert (student)
+# =========================
+@app.route("/api/off_task", methods=["POST"])
+def api_off_task():
+    """Explicit off-task alert endpoint. Called by the extension when a student lands on blocked.gdistrict.org or similar."""
+    try:
+        b = request.json or {}
+        student = (b.get("student") or "").strip()
+        url = (b.get("url") or "").strip()
+        reason = (b.get("reason") or "blocked_page")
+
+        if not student and not url:
+            return jsonify({"ok": False, "error": "missing student or url"}), 400
+
+        d = ensure_keys(load_data())
+        item = {
+            "ts": int(time.time()),
+            "student": student or "unknown",
+            "kind": "off_task",
+            "score": 1.0,
+            "title": "Off-task detected",
+            "url": url,
+            "note": reason,
+        }
+        d.setdefault("alerts", []).append(item)
+        d["alerts"] = d["alerts"][-500:]
+        save_data(d)
+
+        # Also push a notification command for the teacher UI
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Off-task detected",
+            "message": f"{item['student']} visited a blocked page."
+        })
+        save_data(d)
+
+        log_action({"event": "off_task", "student": item["student"], "url": url, "reason": reason})
+        return jsonify({"ok": True})
+    except Exception as e:
+        try:
+            log_action({"event": "off_task_error", "error": str(e)})
+        except Exception:
+            pass
+        return jsonify({"ok": False}), 500
+
+
+
+# =========================
 # AI (optional blueprint)
 # =========================
 try:
@@ -1488,31 +1599,3 @@ if __name__ == "__main__":
     # Ensure data.json exists and is sane on boot
     save_data(ensure_keys(load_data()))
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-# =========================
-# Off-task alert (student)
-# =========================
-@app.route("/api/off_task", methods=["POST"])
-def api_off_task():
-    try:
-        b = request.json or {}
-        student = (b.get("student") or "").strip()
-        url = (b.get("url") or "").strip()
-        reason = (b.get("reason") or "blocked_visit")
-        # Append to timeline log (reuse existing log_action)
-        log_action({"event": "off_task", "student": student, "url": url, "reason": reason, "ts": int(time.time())})
-        # Optionally push a notify to teacher UI
-        d = ensure_keys(load_data())
-        d.setdefault("pending_commands", {}).setdefault("*", []).append({
-            "type": "notify",
-            "title": "Off-task detected",
-            "message": f"{student or 'Student'} visited a blocked page."
-        })
-        save_data(d)
-        return jsonify({"ok": True})
-    except Exception as e:
-        try: log_action({"event": "off_task_error", "error": str(e)})
-        except: pass
-        return jsonify({"ok": False}), 500
-
