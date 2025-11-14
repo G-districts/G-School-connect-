@@ -259,9 +259,13 @@ def admin_page():
 @app.route("/teacher")
 def teacher_page():
     u = current_user()
-    if not u or u["role"] not in ("teacher", "admin"):
-        return redirect(url_for("login_page"))
+    if not u:
+        # keep 'next' so we land back on /teacher after login
+        return redirect(url_for("login_page", next="/teacher"))
+    # IMPORTANT: do NOT redirect admins away from /teacher here.
+    # Render the teacher UI for any logged-in teacher/admin.
     return render_template("teacher.html", data=load_data(), user=u)
+
 
 @app.route("/logout")
 def logout():
