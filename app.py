@@ -298,7 +298,8 @@ PRESENT = defaultdict(lambda: {"offers": {}, "answers": {}, "cand_v": defaultdic
 
 def _clean_room(room):
     r = PRESENT.get(room)
-    if not r: return
+    if not r:
+        return
     # drop stale viewers (> 10 minutes inactivity)
     now = int(time.time())
     for cid in list(r["offers"].keys()):
@@ -313,12 +314,18 @@ def teacher_present_page():
         return redirect(url_for("login_page"))
     # room id based on teacher email (stable across session)
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', (u.get("email") or "classroom").split("@")[0])
-    return render_template("teacher_present.html",  data=load_data(, ice_servers=_ice_servers()), user=u, room=room)
+    return render_template(
+        "teacher_present.html",
+        data=load_data(),
+        ice_servers=_ice_servers(),
+        user=u,
+        room=room,
+    )
 
 @app.route("/present/<room>")
 def student_present_view(room):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    return render_template("present.html",  room=room, ice_servers=_ice_servers())
+    return render_template("present.html", room=room, ice_servers=_ice_servers())
 
 @app.route("/api/present/<room>/start", methods=["POST"])
 def api_present_start(room):
@@ -330,7 +337,14 @@ def api_present_start(room):
 @app.route("/api/present/<room>/end", methods=["POST"])
 def api_present_end(room):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    PRESENT[room] = {"offers": {}, "answers": {}, "cand_v": defaultdict(list), "cand_t": defaultdict(list), "updated": int(time.time()), "active": False}
+    PRESENT[room] = {
+        "offers": {},
+        "answers": {},
+        "cand_v": defaultdict(list),
+        "cand_t": defaultdict(list),
+        "updated": int(time.time()),
+        "active": False,
+    }
     return jsonify({"ok": True})
 
 @app.route("/api/present/<room>/status", methods=["GET"])
@@ -361,7 +375,7 @@ def api_present_offers(room):
 @app.route("/api/present/<room>/answer/<client_id>", methods=["POST", "GET"])
 def api_present_answer(room, client_id):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
+    client_id = re.sub(r'[^a-zA-Z0-9_-]+', '', client_id)
     r = PRESENT[room]
     if request.method == "POST":
         body = request.json or {}
@@ -380,11 +394,11 @@ def api_present_answer(room, client_id):
 @app.route("/api/present/<room>/candidate/<side>/<client_id>", methods=["POST", "GET"])
 def api_present_candidate(room, side, client_id):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
+    client_id = re.sub(r'[^a-zA-Z0-9_-]+', '', client_id)
     side = "viewer" if side.lower().startswith("v") else "teacher"
     r = PRESENT[room]
     bucket_from = r["cand_v"] if side == "viewer" else r["cand_t"]
-    bucket_to   = r["cand_t"] if side == "viewer" else r["cand_v"]
+    bucket_to = r["cand_t"] if side == "viewer" else r["cand_v"]
     if request.method == "POST":
         body = request.json or {}
         cands = body.get("candidates") or []
@@ -1126,8 +1140,10 @@ def api_dm_send():
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     con = db(); cur = con.cursor()
-    cur.execute("INSERT INTO chat_messages(room,user_id,role,text,ts) VALUES(?,?,?,?,?)",
-                (room, user_id, role, text, int(time.time())))
+    cur.execute(
+        "INSERT INTO chat_messages(room,user_id,role,text,ts) VALUES(?,?,?,?,?)",
+        (room, user_id, role, text, int(time.time()))
+    )
     con.commit(); con.close()
     return jsonify({"ok": True})
 
@@ -1145,7 +1161,10 @@ def api_dm_me():
         return jsonify({"ok": False, "error": "forbidden"}), 403
 
     con = db(); cur = con.cursor()
-    cur.execute("SELECT user_id,role,text,ts FROM chat_messages WHERE room=? ORDER BY ts ASC", (f"dm:{student}",))
+    cur.execute(
+        "SELECT user_id,role,text,ts FROM chat_messages WHERE room=? ORDER BY ts ASC",
+        (f"dm:{student}",)
+    )
     msgs = [{"from": r[1], "user": r[0], "text": r[2], "ts": r[3]} for r in cur.fetchall()]
     con.close()
     return jsonify(msgs)
@@ -1240,7 +1259,12 @@ def api_student_set():
     if "paused" in b:
         ov["paused"] = bool(b.get("paused"))
     save_data(d)
-    log_action({"event": "student_set", "student": student, "focus_mode": ov.get("focus_mode"), "paused": ov.get("paused")})
+    log_action({
+        "event": "student_set",
+        "student": student,
+        "focus_mode": ov.get("focus_mode"),
+        "paused": ov.get("paused")
+    })
     return jsonify({"ok": True, "overrides": ov})
 
 @app.route("/api/open_tabs", methods=["POST"])
@@ -1258,10 +1282,24 @@ def api_open_tabs_alias():
         arr = pend.setdefault(student, [])
         arr.append({"type": "open_tabs", "urls": urls, "ts": int(time.time())})
         arr[:] = arr[-50:]
-        log_action({"event": "student_tabs", "student": student, "type": "open_tabs", "count": len(urls)})
+        log_action({
+            "event": "student_tabs",
+            "student": student,
+            "type": "open_tabs",
+            "count": len(urls)
+        })
     else:
-        d["pending_commands"].setdefault("*", []).append({"type": "open_tabs", "urls": urls, "ts": int(time.time())})
-        log_action({"event": "class_tabs", "target": "*", "type": "open_tabs", "count": len(urls)})
+        d["pending_commands"].setdefault("*", []).append({
+            "type": "open_tabs",
+            "urls": urls,
+            "ts": int(time.time())
+        })
+        log_action({
+            "event": "class_tabs",
+            "target": "*",
+            "type": "open_tabs",
+            "count": len(urls)
+        })
     save_data(d)
     return jsonify({"ok": True})
 
@@ -1302,7 +1340,10 @@ def api_chat(class_id):
         d["chat"][class_id] = d["chat"][class_id][-200:]
         save_data(d)
         return jsonify({"ok": True})
-    return jsonify({"enabled": d.get("settings", {}).get("chat_enabled", False), "messages": d["chat"][class_id][-100:]})
+    return jsonify({
+        "enabled": d.get("settings", {}).get("chat_enabled", False),
+        "messages": d["chat"][class_id][-100:]
+    })
 
 
 # =========================
@@ -1430,7 +1471,10 @@ def api_poll():
     d = ensure_keys(load_data())
     d.setdefault("polls", {})[poll_id] = {"question": q, "options": opts, "responses": []}
     d.setdefault("pending_commands", {}).setdefault("*", []).append({
-        "type": "poll", "id": poll_id, "question": q, "options": opts
+        "type": "poll",
+        "id": poll_id,
+        "question": q,
+        "options": opts
     })
     save_data(d)
     log_action({"event": "poll_create", "poll_id": poll_id})
@@ -1513,14 +1557,18 @@ def api_exam():
     if action == "start":
         if not url:
             return jsonify({"ok": False, "error": "url required"}), 400
-        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "exam_start", "url": url})
+        d.setdefault("pending_commands", {}).setdefault("*", []).append(
+            {"type": "exam_start", "url": url}
+        )
         d.setdefault("exam_state", {})["active"] = True
         d["exam_state"]["url"] = url
         save_data(d)
         log_action({"event": "exam", "action": "start", "url": url})
         return jsonify({"ok": True})
     elif action == "end":
-        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "exam_end"})
+        d.setdefault("pending_commands", {}).setdefault("*", []).append(
+            {"type": "exam_end"}
+        )
         d.setdefault("exam_state", {})["active"] = False
         save_data(d)
         log_action({"event": "exam", "action": "end"})
@@ -1599,6 +1647,20 @@ except Exception as _e:
     print("AI routes not loaded:", _e)
 
 
+@app.route("/api/present/<room>/diag", methods=["GET"])
+def api_present_diag(room):
+    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
+    r = PRESENT.get(room) or {"offers": {}, "answers": {}, "cand_v": {}, "cand_t": {}, "active": False}
+    return jsonify({
+        "ok": True,
+        "active": bool(r.get("active")),
+        "offers": len(r.get("offers", {})),
+        "answers": len(r.get("answers", {})),
+        "cand_v": {k: len(v) for k, v in (r.get("cand_v") or {}).items()},
+        "cand_t": {k: len(v) for k, v in (r.get("cand_t") or {}).items()},
+    })
+
+
 # =========================
 # Run
 # =========================
@@ -1606,18 +1668,3 @@ if __name__ == "__main__":
     # Ensure data.json exists and is sane on boot
     save_data(ensure_keys(load_data()))
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-@app.route("/api/present/<room>/diag", methods=["GET"])
-def api_present_diag(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    r = PRESENT.get(room) or {"offers":{}, "answers":{}, "cand_v":{}, "cand_t":{}, "active": False}
-    return jsonify({
-        "ok": True,
-        "active": bool(r.get("active")),
-        "offers": len(r.get("offers", {})),
-        "answers": len(r.get("answers", {})),
-        "cand_v": {k: len(v) for k,v in (r.get("cand_v") or {}).items()},
-        "cand_t": {k: len(v) for k,v in (r.get("cand_t") or {}).items()},
-    })
