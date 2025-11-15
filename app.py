@@ -6,6 +6,8 @@ from flask import Flask, request, jsonify, render_template, session, redirect, u
 from flask_cors import CORS
 import json, os, time, sqlite3, traceback, uuid, re
 from urllib.parse import urlparse
+from datetime import datetime
+from collections import defaultdict
 
 # ---------------------------
 # Flask App Initialization
@@ -285,25 +287,24 @@ def logout():
     return redirect(url_for("login_page"))
 
 
-
 # =========================
 # Teacher Presentation (WebRTC signaling via REST polling)
 # =========================
 
-from datetime import datetime
-from collections import defaultdict
-
-# In-memory session store: {room: {offers:{client_id: sdp}, answers:{client_id:sdp}, cand_v:{client_id:[cands]}, cand_t:{client_id:[cands]}, updated:int, active:bool}}
-PRESENT = defaultdict(lambda: {"offers": {}, "answers": {}, "cand_v": defaultdict(list), "cand_t": defaultdict(list), "updated": int(time.time()), "active": False})
+PRESENT = defaultdict(lambda: {
+    "offers": {},
+    "answers": {},
+    "cand_v": defaultdict(list),
+    "cand_t": defaultdict(list),
+    "updated": int(time.time()),
+    "active": False
+})
 
 def _clean_room(room):
     r = PRESENT.get(room)
-    if not r: return
-    # drop stale viewers (> 10 minutes inactivity)
+    if not r:
+        return
     now = int(time.time())
-    for cid in list(r["offers"].keys()):
-        # if no answer & offer older than 10 min, drop
-        pass
     r["updated"] = now
 
 @app.route("/teacher/present")
@@ -324,7 +325,7 @@ def teacher_present_page():
 @app.route("/present/<room>")
 def student_present_view(room):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    return render_template("present.html",  room=room, ice_servers=_ice_servers())
+    return render_template("present.html", room=room, ice_servers=_ice_servers())
 
 @app.route("/api/present/<room>/start", methods=["POST"])
 def api_present_start(room):
@@ -336,7 +337,14 @@ def api_present_start(room):
 @app.route("/api/present/<room>/end", methods=["POST"])
 def api_present_end(room):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    PRESENT[room] = {"offers": {}, "answers": {}, "cand_v": defaultdict(list), "cand_t": defaultdict(list), "updated": int(time.time()), "active": False}
+    PRESENT[room] = {
+        "offers": {},
+        "answers": {},
+        "cand_v": defaultdict(list),
+        "cand_t": defaultdict(list),
+        "updated": int(time.time()),
+        "active": False
+    }
     return jsonify({"ok": True})
 
 @app.route("/api/present/<room>/status", methods=["GET"])
@@ -367,7 +375,7 @@ def api_present_offers(room):
 @app.route("/api/present/<room>/answer/<client_id>", methods=["POST", "GET"])
 def api_present_answer(room, client_id):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
+    client_id = re.sub(r'[^a-zA-Z0-9_-]+', '', client_id)
     r = PRESENT[room]
     if request.method == "POST":
         body = request.json or {}
@@ -386,11 +394,11 @@ def api_present_answer(room, client_id):
 @app.route("/api/present/<room>/candidate/<side>/<client_id>", methods=["POST", "GET"])
 def api_present_candidate(room, side, client_id):
     room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    client_id = re.sub(r'[^a-zA-Z0-9_-]+','', client_id)
+    client_id = re.sub(r'[^a-zA-Z0-9_-]+', '', client_id)
     side = "viewer" if side.lower().startswith("v") else "teacher"
     r = PRESENT[room]
     bucket_from = r["cand_v"] if side == "viewer" else r["cand_t"]
-    bucket_to   = r["cand_t"] if side == "viewer" else r["cand_v"]
+    bucket_to = r["cand_t"] if side == "viewer" else r["cand_v"]
     if request.method == "POST":
         body = request.json or {}
         cands = body.get("candidates") or []
@@ -403,6 +411,19 @@ def api_present_candidate(room, side, client_id):
         cands = bucket_to.get(client_id, [])
         bucket_to[client_id] = []
         return jsonify({"ok": True, "candidates": cands})
+
+@app.route("/api/present/<room>/diag", methods=["GET"])
+def api_present_diag(room):
+    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
+    r = PRESENT.get(room) or {"offers": {}, "answers": {}, "cand_v": {}, "cand_t": {}, "active": False}
+    return jsonify({
+        "ok": True,
+        "active": bool(r.get("active")),
+        "offers": len(r.get("offers", {})),
+        "answers": len(r.get("answers", {})),
+        "cand_v": {k: len(v) for k, v in (r.get("cand_v") or {}).items()},
+        "cand_t": {k: len(v) for k, v in (r.get("cand_t") or {}).items()},
+    })
 
 
 # =========================
@@ -461,6 +482,7 @@ def api_categories():
     u = current_user()
     if not u or u["role"] != "admin":
         return jsonify({"ok": False, "error": "forbidden"}), 403
+
     d = ensure_keys(load_data())
     b = request.json or {}
     name = b.get("name")
@@ -468,8 +490,16 @@ def api_categories():
     bp = b.get("blockPage", "")
     if not name:
         return jsonify({"ok": False, "error": "name required"}), 400
+
     d["categories"][name] = {"urls": urls, "blockPage": bp}
+
+    # Policy changed → force refresh for all extensions
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
+
     save_data(d)
+    log_action({"event": "categories_update", "name": name})
     return jsonify({"ok": True})
 
 @app.route("/api/categories/delete", methods=["POST"])
@@ -477,11 +507,19 @@ def api_categories_delete():
     u = current_user()
     if not u or u["role"] != "admin":
         return jsonify({"ok": False, "error": "forbidden"}), 403
+
     d = ensure_keys(load_data())
     name = (request.json or {}).get("name")
     if name in d["categories"]:
         del d["categories"][name]
+
+        # Policy changed → force refresh
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "policy_refresh"
+        })
+
         save_data(d)
+        log_action({"event": "categories_delete", "name": name})
     return jsonify({"ok": True})
 
 
@@ -493,10 +531,25 @@ def api_announce():
     u = current_user()
     if not u or u["role"] not in ("teacher", "admin"):
         return jsonify({"ok": False, "error": "forbidden"}), 403
+
     d = ensure_keys(load_data())
-    d["announcements"] = (request.json or {}).get("message", "")
+    body = request.json or {}
+
+    msg = (
+        (body.get("message") or "").strip()
+        or (body.get("text") or "").strip()
+        or (body.get("announcement") or "").strip()
+    )
+
+    d["announcements"] = msg
+
+    # Tell all extensions to re-fetch /api/policy so they see the new announcement
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
+
     save_data(d)
-    log_action({"event": "announce"})
+    log_action({"event": "announce", "message": msg})
     return jsonify({"ok": True})
 
 @app.route("/api/class/set", methods=["GET", "POST"])
@@ -540,6 +593,11 @@ def api_class_set():
             "title": "Class session is active",
             "message": "Please join and stay until dismissed."
         })
+
+    # IMPORTANT: force all extensions to re-fetch policy for new rules
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
 
     save_data(d)
     log_action({"event": "class_set", "active": cls.get("active", True)})
@@ -1064,6 +1122,12 @@ def api_scenes_apply():
         store["current"] = None
         _save_scenes(store)
         log_action({"event": "scene_disabled"})
+
+        # Policy changed → force refresh
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "policy_refresh"})
+        save_data(d)
+
         return jsonify({"ok": True, "current": None})
 
     if not sid:
@@ -1097,6 +1161,11 @@ def api_scenes_clear():
     scenes["current"] = None
     _save_scenes(scenes)
     log_action({"event": "scene_clear"})
+
+    d = ensure_keys(load_data())
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "policy_refresh"})
+    save_data(d)
+
     return jsonify({"ok": True})
 
 
@@ -1414,6 +1483,12 @@ def api_save_overrides():
     b = request.json or {}
     d["allowlist"] = b.get("allowlist", [])
     d["teacher_blocks"] = b.get("teacher_blocks", [])
+
+    # Policy changed → force refresh for all students
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
+
     save_data(d)
     log_action({"event": "overrides_save"})
     return jsonify({"ok": True})
@@ -1606,24 +1681,38 @@ except Exception as _e:
 
 
 # =========================
+# Off-task alert (student)
+# =========================
+@app.route("/api/off_task", methods=["POST"])
+def api_off_task():
+    try:
+        b = request.json or {}
+        student = (b.get("student") or "").strip()
+        url = (b.get("url") or "").strip()
+        reason = (b.get("reason") or "blocked_visit")
+        # Append to timeline log (reuse existing log_action)
+        log_action({"event": "off_task", "student": student, "url": url, "reason": reason, "ts": int(time.time())})
+        # Optionally push a notify to teacher UI
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Off-task detected",
+            "message": f"{student or 'Student'} visited a blocked page."
+        })
+        save_data(d)
+        return jsonify({"ok": True})
+    except Exception as e:
+        try:
+            log_action({"event": "off_task_error", "error": str(e)})
+        except:
+            pass
+        return jsonify({"ok": False}), 500
+
+
+# =========================
 # Run
 # =========================
 if __name__ == "__main__":
     # Ensure data.json exists and is sane on boot
     save_data(ensure_keys(load_data()))
     app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-@app.route("/api/present/<room>/diag", methods=["GET"])
-def api_present_diag(room):
-    room = re.sub(r'[^a-zA-Z0-9_-]+', '', room)
-    r = PRESENT.get(room) or {"offers":{}, "answers":{}, "cand_v":{}, "cand_t":{}, "active": False}
-    return jsonify({
-        "ok": True,
-        "active": bool(r.get("active")),
-        "offers": len(r.get("offers", {})),
-        "answers": len(r.get("answers", {})),
-        "cand_v": {k: len(v) for k,v in (r.get("cand_v") or {}).items()},
-        "cand_t": {k: len(v) for k,v in (r.get("cand_t") or {}).items()},
-    })
