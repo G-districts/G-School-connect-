@@ -449,14 +449,29 @@ def api_login():
 # =========================
 @app.route("/api/data")
 def api_data():
+    """Compatibility wrapper used by teacher.html's loadData()."""
+    d = ensure_keys(load_data())
+    cls = d["classes"].get("period1", {})
     return jsonify({
         "settings": {
-            "chat_enabled": bool(get_setting("chat_enabled", True)),
+            "chat_enabled": bool(d.get("settings", {}).get("chat_enabled", True)),
             "youtube_mode": get_setting("youtube_mode", "normal"),
         },
         "lists": {
             "teacher_blocks": get_setting("teacher_blocks", []),
             "teacher_allow": get_setting("teacher_allow", []),
+        },
+        # added for teacher.html compatibility
+        "classes": {
+            "period1": {
+                "name": cls.get("name", "Period 1"),
+                "active": bool(cls.get("active", True)),
+                "focus_mode": bool(cls.get("focus_mode", False)),
+                "paused": bool(cls.get("paused", False)),
+                "allowlist": list(cls.get("allowlist", [])),
+                "teacher_blocks": list(cls.get("teacher_blocks", [])),
+                "students": list(cls.get("students", [])),
+            }
         }
     })
 
@@ -790,7 +805,8 @@ def api_heartbeat():
             # Screenshot history: if extension passes `shot_log: [{tabId,dataUrl,title,url}]`
             shot_log = b.get("shot_log") or []
             if shot_log:
-                hist = d.setdefault("screenshots", {}).setdefault(student, [])
+                hist = d.setdefault("screenshots", {}).setdefault(student, []
+                )
                 for s in shot_log[:10]:
                     hist.append({
                         "ts": now,
@@ -1009,6 +1025,84 @@ def api_alerts_clear():
         d["alerts"] = []
     save_data(d)
     return jsonify({"ok": True})
+
+
+# =========================
+# Engagement API (NEW)
+# =========================
+@app.route("/api/engagement")
+def api_engagement():
+    """
+    Simple engagement score per student over a time window.
+    Query param: window (seconds) -> default 1800, min 60, max 14400.
+    """
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    try:
+        window = int(request.args.get("window", 1800))
+    except Exception:
+        window = 1800
+    window = max(60, min(window, 14400))
+
+    now = int(time.time())
+    since = now - window
+
+    d = ensure_keys(load_data())
+    presence = d.get("presence", {}) or {}
+    history = d.get("history", {}) or {}
+    off_events = d.get("offtask_events", []) or []
+    alerts = d.get("alerts", []) or []
+
+    students = set(presence.keys())
+    for student, arr in history.items():
+        if any((e.get("ts") or 0) >= since for e in (arr or [])):
+            students.add(student)
+
+    results = []
+    for student in sorted(students):
+        if not student:
+            continue
+
+        hist = [e for e in (history.get(student) or []) if (e.get("ts") or 0) >= since]
+        total_events = len(hist)
+
+        student_off = [
+            e for e in off_events
+            if (e.get("student") == student and (e.get("ts") or 0) >= since and not bool(e.get("on_task", True)))
+        ]
+        off_count = len(student_off)
+
+        student_alerts = [a for a in alerts if (a.get("student") == student and (a.get("ts") or 0) >= since)]
+        alerts_count = len(student_alerts)
+
+        if total_events > 0:
+            ratio = off_count / float(total_events)
+            engagement = max(0.0, min(1.0, 1.0 - ratio))
+        else:
+            engagement = 1.0  # neutral if no events
+
+        risk = "low"
+        if engagement < 0.6 or off_count >= 5 or alerts_count >= 3:
+            risk = "medium"
+        if engagement < 0.4 or off_count >= 10 or alerts_count >= 5:
+            risk = "high"
+
+        pres = presence.get(student) or {}
+        tabs_open = len(pres.get("tabs") or []) if isinstance(pres.get("tabs"), list) else 0
+
+        results.append({
+            "student": student,
+            "engagement": engagement,
+            "offtask_events": off_count,
+            "alerts": alerts_count,
+            "tabs_open": tabs_open,
+            "last_seen": pres.get("last_seen") or 0,
+            "risk": risk
+        })
+
+    return jsonify({"ok": True, "window": window, "since": since, "now": now, "students": results})
 
 
 # =========================
@@ -1690,9 +1784,7 @@ def api_off_task():
         student = (b.get("student") or "").strip()
         url = (b.get("url") or "").strip()
         reason = (b.get("reason") or "blocked_visit")
-        # Append to timeline log (reuse existing log_action)
         log_action({"event": "off_task", "student": student, "url": url, "reason": reason, "ts": int(time.time())})
-        # Optionally push a notify to teacher UI
         d = ensure_keys(load_data())
         d.setdefault("pending_commands", {}).setdefault("*", []).append({
             "type": "notify",
