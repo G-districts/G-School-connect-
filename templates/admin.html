@@ -40,6 +40,38 @@
   </table>
 </article>
 
+<h4>Category Schedules (auto block/unblock)</h4>
+<article>
+  <p class="mini">
+    Use schedules to automatically turn category blocking <b>on</b> and <b>off</b> at specific times.
+    When a schedule is enabled for a category, it overrides the manual “Blocked?” toggle.
+  </p>
+  <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end">
+    <label>
+      Category
+      <select id="schedCategory"></select>
+    </label>
+    <label>
+      <input type="checkbox" id="schedEnabled">
+      Enable schedule for this category
+    </label>
+    <label>
+      Start time
+      <input type="time" id="schedStart">
+    </label>
+    <label>
+      End time
+      <input type="time" id="schedEnd">
+    </label>
+    <label>
+      <input type="checkbox" id="schedWeekdays">
+      Weekdays only (Mon–Fri)
+    </label>
+    <button id="saveSchedule" class="secondary">Save Schedule</button>
+    <small id="schedMsg" style="margin-left:6px"></small>
+  </div>
+</article>
+
 <h3>Manual Overrides</h3>
 <article>
   <details open>
@@ -57,13 +89,42 @@
 
 <script>
 // Load categories + overrides
+let _latestCategories = [];
+
+function updateScheduleForm() {
+  const cats = _latestCategories || [];
+  const sel = document.getElementById('schedCategory');
+  if (!sel) return;
+  let selectedName = sel.value;
+  if (!selectedName && cats.length) {
+    selectedName = cats[0].name;
+    sel.value = selectedName;
+  }
+  const cat = cats.find(c => c.name === selectedName) || {};
+  const sched = cat.schedule || null;
+
+  const enabledEl = document.getElementById('schedEnabled');
+  const startEl = document.getElementById('schedStart');
+  const endEl = document.getElementById('schedEnd');
+  const weekdaysEl = document.getElementById('schedWeekdays');
+  if (!enabledEl || !startEl || !endEl || !weekdaysEl) return;
+
+  enabledEl.checked = !!(sched && sched.enabled);
+  startEl.value = (sched && sched.start) || "";
+  endEl.value = (sched && sched.end) || "";
+  weekdaysEl.checked = !!(sched && sched.weekdays_only);
+}
+
 async function refresh(){
   // categories from AI API
   const res = await fetch('/api/ai/categories');
   const j = await res.json();
+  const cats = j.categories || [];
+  _latestCategories = cats;
+
   const tbody = document.getElementById('cats');
   tbody.innerHTML = '';
-  (j.categories||[]).forEach(c=>{
+  cats.forEach(c=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><b>${c.name}</b></td>
@@ -74,12 +135,30 @@ async function refresh(){
     tbody.appendChild(tr);
   });
 
+  // Populate schedule category dropdown
+  const sel = document.getElementById('schedCategory');
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = '';
+    cats.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+    if (prev && cats.some(c=>c.name===prev)) {
+      sel.value = prev;
+    }
+    updateScheduleForm();
+  }
+
   // ✅ load global overrides
   const o = await (await fetch('/api/overrides')).json();
   document.getElementById('allowlist').value = (o.allowlist || []).join("\n");
   document.getElementById('blocklist').value = (o.teacher_blocks || []).join("\n");
 }
 refresh();
+
 
 // Save global settings
 document.getElementById('save').onclick = async()=>{
@@ -105,6 +184,38 @@ document.addEventListener('click', async(e)=>{
     refresh();
   }
 });
+
+
+// Save schedule for selected category
+const schedCategoryEl = document.getElementById('schedCategory');
+const saveScheduleBtn = document.getElementById('saveSchedule');
+if (schedCategoryEl && saveScheduleBtn) {
+  schedCategoryEl.addEventListener('change', updateScheduleForm);
+  saveScheduleBtn.onclick = async()=>{
+    const name = schedCategoryEl.value;
+    if (!name) return;
+    const schedule = {
+      enabled: document.getElementById('schedEnabled').checked,
+      start: document.getElementById('schedStart').value || null,
+      end: document.getElementById('schedEnd').value || null,
+      weekdays_only: document.getElementById('schedWeekdays').checked
+    };
+    const body = { name, schedule };
+    const r = await fetch('/api/ai/categories',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const msgEl = document.getElementById('schedMsg');
+    if (msgEl) {
+      msgEl.textContent = r.ok ? 'Schedule saved' : 'Error saving schedule';
+      setTimeout(()=>{ msgEl.textContent=''; }, 2000);
+    }
+    if (r.ok) {
+      refresh();
+    }
+  };
+}
 
 // Save manual overrides
 document.getElementById('saveLists').onclick = async()=>{
