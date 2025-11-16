@@ -114,6 +114,13 @@
 let _latestCategories = [];
 
 // Turn backend schedule_status + schedule into a human-readable label
+// Expected backend fields per category (from /api/ai/categories):
+// {
+//   name, blocked, block_url,
+//   schedule: { enabled, start, end, weekdays_only, mode, ignore_schedule } | null,
+//   schedule_status: "none" | "blocking_now" | "allowing_now" | "scheduled_inactive" | "overridden",
+//   effective_blocked: bool
+// }
 function scheduleStatusLabel(c) {
   const status = c.schedule_status || "none";
   const sched = c.schedule || null;
@@ -143,11 +150,13 @@ function updateScheduleForm() {
   const cats = _latestCategories || [];
   const sel = document.getElementById('schedCategory');
   if (!sel) return;
+
   let selectedName = sel.value;
   if (!selectedName && cats.length) {
     selectedName = cats[0].name;
     sel.value = selectedName;
   }
+
   const cat = cats.find(c => c.name === selectedName) || {};
   const sched = cat.schedule || null;
 
