@@ -34,17 +34,24 @@
 <article>
   <table>
     <thead>
-      <tr><th>Category</th><th>Blocked?</th><th>Block Page</th><th>Save</th></tr>
+      <tr>
+        <th>Category</th>
+        <th>Blocked?</th>
+        <th>Block Page</th>
+        <th>Schedule</th>
+        <th>Save</th>
+      </tr>
     </thead>
     <tbody id="cats"></tbody>
   </table>
 </article>
 
-<h4>Category Schedules (auto block/unblock)</h4>
+<h4>Category Schedules (auto block / allow)</h4>
 <article>
   <p class="mini">
-    Use schedules to automatically turn category blocking <b>on</b> and <b>off</b> at specific times.
-    When a schedule is enabled for a category, it overrides the manual “Blocked?” toggle.
+    Use schedules to automatically <b>block</b> or <b>allow</b> categories at specific times.
+    When a schedule is enabled and active, it overrides the manual “Blocked?” toggle.
+    You can also mark a schedule as <b>ignored</b> so that the manual setting is used instead.
   </p>
   <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end">
     <label>
@@ -55,6 +62,17 @@
       <input type="checkbox" id="schedEnabled">
       Enable schedule for this category
     </label>
+    <fieldset style="min-width:220px">
+      <legend>Schedule mode</legend>
+      <label>
+        <input type="radio" id="schedModeBlock" name="schedMode" value="block" checked>
+        Block during these times
+      </label>
+      <label>
+        <input type="radio" id="schedModeAllow" name="schedMode" value="allow">
+        Allow only during these times
+      </label>
+    </fieldset>
     <label>
       Start time
       <input type="time" id="schedStart">
@@ -66,6 +84,10 @@
     <label>
       <input type="checkbox" id="schedWeekdays">
       Weekdays only (Mon–Fri)
+    </label>
+    <label>
+      <input type="checkbox" id="schedOverride">
+      Ignore schedule (use manual Blocked?)
     </label>
     <button id="saveSchedule" class="secondary">Save Schedule</button>
     <small id="schedMsg" style="margin-left:6px"></small>
@@ -91,6 +113,32 @@
 // Load categories + overrides
 let _latestCategories = [];
 
+// Turn backend schedule_status + schedule into a human-readable label
+function scheduleStatusLabel(c) {
+  const status = c.schedule_status || "none";
+  const sched = c.schedule || null;
+  const mode = (sched && sched.mode) || "block";
+
+  if (status === "none" || !sched) {
+    return "None";
+  }
+  if (status === "overridden") {
+    return "On (overridden, using manual setting)";
+  }
+  if (status === "blocking_now") {
+    return "On (blocking now)";
+  }
+  if (status === "allowing_now") {
+    return "On (allowing now)";
+  }
+  if (status === "scheduled_inactive") {
+    return mode === "allow"
+      ? "Allow schedule (currently inactive)"
+      : "Block schedule (currently inactive)";
+  }
+  return status;
+}
+
 function updateScheduleForm() {
   const cats = _latestCategories || [];
   const sel = document.getElementById('schedCategory');
@@ -107,12 +155,22 @@ function updateScheduleForm() {
   const startEl = document.getElementById('schedStart');
   const endEl = document.getElementById('schedEnd');
   const weekdaysEl = document.getElementById('schedWeekdays');
-  if (!enabledEl || !startEl || !endEl || !weekdaysEl) return;
+  const modeBlockEl = document.getElementById('schedModeBlock');
+  const modeAllowEl = document.getElementById('schedModeAllow');
+  const overrideEl = document.getElementById('schedOverride');
+
+  if (!enabledEl || !startEl || !endEl || !weekdaysEl || !modeBlockEl || !modeAllowEl || !overrideEl) return;
 
   enabledEl.checked = !!(sched && sched.enabled);
   startEl.value = (sched && sched.start) || "";
   endEl.value = (sched && sched.end) || "";
   weekdaysEl.checked = !!(sched && sched.weekdays_only);
+
+  const mode = (sched && sched.mode) || "block";
+  modeAllowEl.checked = mode === "allow";
+  modeBlockEl.checked = mode !== "allow";
+
+  overrideEl.checked = !!(sched && sched.ignore_schedule);
 }
 
 async function refresh(){
@@ -126,10 +184,12 @@ async function refresh(){
   tbody.innerHTML = '';
   cats.forEach(c=>{
     const tr = document.createElement('tr');
+    const schedLabel = scheduleStatusLabel(c);
     tr.innerHTML = `
       <td><b>${c.name}</b></td>
       <td><input type="checkbox" ${c.blocked?'checked':''} data-name="${c.name}" class="blk"></td>
       <td><input type="url" value="${c.block_url||''}" data-name="${c.name}" class="bp"></td>
+      <td><small class="mini">${schedLabel}</small></td>
       <td><button data-name="${c.name}" class="saveCat">Save</button></td>
     `;
     tbody.appendChild(tr);
@@ -159,7 +219,6 @@ async function refresh(){
 }
 refresh();
 
-
 // Save global settings
 document.getElementById('save').onclick = async()=>{
   const body = {
@@ -167,24 +226,33 @@ document.getElementById('save').onclick = async()=>{
     chat_enabled: document.getElementById('chat').checked,
     passcode: document.getElementById('passcode').value
   };
-  const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r = await fetch('/api/settings',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
   document.getElementById('msg').textContent = r.ok?'Saved':'Error';
   setTimeout(()=>document.getElementById('msg').textContent='',1500);
 };
 
-// Save individual category
+// Save individual category (manual setting)
 document.addEventListener('click', async(e)=>{
   if(e.target.classList.contains('saveCat')){
     const name = e.target.dataset.name;
     const blocked = document.querySelector('.blk[data-name="'+name+'"]').checked;
     const block_url = document.querySelector('.bp[data-name="'+name+'"]').value;
     const body = {name, blocked, block_url};
-    const r = await fetch('/api/ai/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r = await fetch('/api/ai/categories',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)
+    });
     alert(r.ok ? 'Saved!' : 'Error saving category');
-    refresh();
+    if (r.ok) {
+      refresh();
+    }
   }
 });
-
 
 // Save schedule for selected category
 const schedCategoryEl = document.getElementById('schedCategory');
@@ -198,7 +266,9 @@ if (schedCategoryEl && saveScheduleBtn) {
       enabled: document.getElementById('schedEnabled').checked,
       start: document.getElementById('schedStart').value || null,
       end: document.getElementById('schedEnd').value || null,
-      weekdays_only: document.getElementById('schedWeekdays').checked
+      weekdays_only: document.getElementById('schedWeekdays').checked,
+      mode: document.getElementById('schedModeAllow').checked ? 'allow' : 'block',
+      ignore_schedule: document.getElementById('schedOverride').checked
     };
     const body = { name, schedule };
     const r = await fetch('/api/ai/categories',{
@@ -222,7 +292,11 @@ document.getElementById('saveLists').onclick = async()=>{
   const allowlist = document.getElementById('allowlist').value.split("\n").map(s=>s.trim()).filter(Boolean);
   const teacher_blocks = document.getElementById('blocklist').value.split("\n").map(s=>s.trim()).filter(Boolean);
   const body = {allowlist, teacher_blocks};
-  const r = await fetch('/api/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r = await fetch('/api/overrides',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
   document.getElementById('msg2').textContent = r.ok?'Saved':'Error';
   setTimeout(()=>document.getElementById('msg2').textContent='',1500);
 };
