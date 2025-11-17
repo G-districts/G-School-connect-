@@ -685,7 +685,7 @@ def api_commands(student):
 
 
 # =========================
-# Off-task Check (simple)
+# Off-task Check (simple) – FIXED
 # =========================
 @app.route("/api/offtask/check", methods=["POST"])
 def api_offtask_check():
@@ -696,20 +696,51 @@ def api_offtask_check():
         return jsonify({"ok": False}), 400
 
     d = ensure_keys(load_data())
-    # allowlist from policy (scene) if any
+
+    # Build allowed domains from persisted policy + teacher allow list
     scene_allowed = set()
-    for patt in (d.get("policy", {}).get("allowlist") or []):
-        m = re.match(r"\*\:\/\/\*\.(.+?)\/\*", patt)
+
+    policy_allow = (d.get("policy", {}).get("allowlist") or [])
+    teacher_allow = get_setting("teacher_allow", []) or []
+    merged_allow = list(policy_allow) + list(teacher_allow)
+
+    for patt in merged_allow:
+        s = str(patt or "").strip()
+        if not s:
+            continue
+
+        # Chrome-style pattern: *://*.example.com/*
+        m = re.match(r"\*\:\/\/\*\.(.+?)\/\*", s)
         if m:
             scene_allowed.add(m.group(1).lower())
+            continue
+
+        # Fallbacks for raw domains or URLs
+        s = re.sub(r"^\*\:\/\/", "", s)            # remove leading *://
+        s = re.sub(r"^https?:\/\/", "", s)         # remove protocol
+        s = s.strip("/*")                          # trim wildcards and slashes
+        if s:
+            scene_allowed.add(s.lower())
 
     host = ""
     try:
-        host = urlparse(url).hostname or ""
+        host = (urlparse(url).hostname or "").lower()
     except Exception:
         pass
 
-    on_task = any(host.endswith(dom) for dom in scene_allowed) if host else False
+    # NEW: default to on_task when no allowlist is configured
+    on_task = True
+
+    # If we *do* have an allowlist, then enforce it
+    if scene_allowed and host:
+        for dom in scene_allowed:
+            if host == dom or host.endswith("." + dom) or host.endswith(dom):
+                on_task = True
+                break
+        else:
+            on_task = False
+
+    # Hard-block known bad keywords
     bad_kw = ("coolmath", "roblox", "twitch", "steam", "epicgames")
     if any(k in url.lower() for k in bad_kw):
         on_task = False
@@ -805,8 +836,7 @@ def api_heartbeat():
             # Screenshot history: if extension passes `shot_log: [{tabId,dataUrl,title,url}]`
             shot_log = b.get("shot_log") or []
             if shot_log:
-                hist = d.setdefault("screenshots", {}).setdefault(student, []
-                )
+                hist = d.setdefault("screenshots", {}).setdefault(student, [])
                 for s in shot_log[:10]:
                     hist.append({
                         "ts": now,
@@ -859,7 +889,7 @@ def api_extension_toggle():
 
 
 # =========================
-# Policy
+# Policy – with safe scene handling & snapshot
 # =========================
 @app.route("/api/policy", methods=["POST"])
 def api_policy():
@@ -902,13 +932,17 @@ def api_policy():
                 break
 
         if scene_obj:
-            if scene_obj.get("type") == "allowed":
-                # allow-only mode (focus true)
-                allowlist = list(scene_obj.get("allow", []))
+            scene_type = scene_obj.get("type")
+            scene_allow = scene_obj.get("allow") or []
+            scene_block = scene_obj.get("block") or []
+
+            if scene_type == "allowed" and scene_allow:
+                # allow-only mode (focus true) ONLY if there are actually allowed patterns
+                allowlist = list(scene_allow)
                 focus = True
-            elif scene_obj.get("type") == "blocked":
+            elif scene_type == "blocked":
                 # add extra teacher block patterns
-                teacher_blocks = (teacher_blocks or []) + list(scene_obj.get("block", []))
+                teacher_blocks = (teacher_blocks or []) + list(scene_block)
 
     # ---- Persist effective policy back into data.json ----
     cls["allowlist"] = allowlist
