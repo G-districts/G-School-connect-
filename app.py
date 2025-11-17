@@ -881,7 +881,7 @@ def api_policy():
     pending = d.get("pending_per_student", {}).get(student, []) if student else []
     if student and student in d.get("pending_per_student", {}):
         d["pending_per_student"].pop(student, None)
-        save_data(d)
+        # do not save yet; we'll save once policy is fully computed
 
     # Scene merge logic (no over-blocking)
     store = _load_scenes()
@@ -909,6 +909,23 @@ def api_policy():
             elif scene_obj.get("type") == "blocked":
                 # add extra teacher block patterns
                 teacher_blocks = (teacher_blocks or []) + list(scene_obj.get("block", []))
+
+    # ---- Persist effective policy back into data.json ----
+    cls["allowlist"] = allowlist
+    cls["teacher_blocks"] = teacher_blocks
+    d["classes"]["period1"] = cls
+
+    # Snapshot policy so other endpoints (like /api/offtask/check) can reuse it
+    d["policy"] = {
+        "allowlist": allowlist,
+        "teacher_blocks": teacher_blocks,
+        "focus_mode": bool(focus),
+        "paused": bool(paused),
+        "scene": store.get("current"),
+    }
+
+    save_data(d)
+    # ------------------------------------------------------
 
     resp = {
         "blocked_redirect": d.get("settings", {}).get("blocked_redirect", "https://blocked.gdistrict.org/Gschool%20block"),
