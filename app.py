@@ -9,9 +9,8 @@ from urllib.parse import urlparse
 from datetime import datetime
 from collections import defaultdict
 
-# NEW: DNS + threading imports
-import socketserver, socket, threading
-from dnslib import DNSRecord, DNSHeader, RR, QTYPE, A, RCODE
+# NEW: use external dns_server.py
+from dns_server import start_dns_in_background
 
 # ---------------------------
 # Flask App Initialization
@@ -255,109 +254,6 @@ def _save_scenes(obj):
     obj.setdefault("current", None)
     with open(SCENES_PATH, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
-
-
-# =========================
-# Shared Policy Helpers (HTTP + DNS)
-# =========================
-
-def get_policy_snapshot():
-    """
-    Return the effective allowlist, teacher_blocks, categories, and default block page
-    from data.json, using the snapshot that /api/policy maintains when possible.
-    """
-    d = ensure_keys(load_data())
-
-    # Prefer the snapshot stored by /api/policy
-    policy = d.get("policy") or {}
-    allowlist = list(policy.get("allowlist", []))
-    teacher_blocks = list(policy.get("teacher_blocks", []))
-
-    # Fallback to class config if no snapshot yet
-    if not allowlist and not teacher_blocks:
-        cls = d["classes"].get("period1", {})
-        allowlist = list(cls.get("allowlist", []))
-        teacher_blocks = list(cls.get("teacher_blocks", []))
-
-    categories = d.get("categories", {}) or {}
-
-    # Global default block page (used when no category-specific override)
-    default_block_page = d.get("settings", {}).get(
-        "blocked_redirect",
-        "https://blocked.gdistrict.org/Gschool%20block"
-    )
-
-    return allowlist, teacher_blocks, categories, default_block_page
-
-
-def _normalize_pattern_to_domain(pattern: str) -> str:
-    """
-    Take a Chrome-style or URL pattern and extract a bare domain.
-      '*://*.example.com/*' -> 'example.com'
-      'https://youtube.com/' -> 'youtube.com'
-    """
-    s = (pattern or "").strip()
-    if not s:
-        return ""
-
-    # Chrome-style '*://*.example.com/*'
-    m = re.match(r"\*\:\/\/\*\.(.+?)\/\*", s)
-    if m:
-        return m.group(1).lower()
-
-    # Strip protocol and wildcards
-    s = re.sub(r"^\*\:\/\/", "", s)          # remove leading *://
-    s = re.sub(r"^https?:\/\/", "", s)       # remove http(s)://
-    s = s.strip("/*")                        # trim wildcards and slashes
-    return s.lower()
-
-
-def match_block_category(domain: str):
-    """
-    Given a domain, decide if it's blocked and, if so, which category
-    (if any) and which block page URL should apply.
-
-    Returns:
-        (blocked: bool, block_page: str | None, category_name: str | None)
-    """
-    if not domain:
-        return False, None, None
-
-    domain = domain.lower().rstrip(".")
-    allowlist, teacher_blocks, categories, default_block_page = get_policy_snapshot()
-
-    # 1) Check teacher_blocks (global override)
-    for patt in (teacher_blocks or []):
-        ddom = _normalize_pattern_to_domain(patt)
-        if not ddom:
-            continue
-        if domain == ddom or domain.endswith("." + ddom):
-            return True, default_block_page, None
-
-    # 2) Check categories' URL patterns (with per-category blockPage override)
-    for cat_name, cat in (categories or {}).items():
-        cat_block_page = (cat.get("blockPage") or "").strip() or default_block_page
-        for patt in (cat.get("urls") or []):
-            ddom = _normalize_pattern_to_domain(patt)
-            if not ddom:
-                continue
-            if domain == ddom or domain.endswith("." + ddom):
-                return True, cat_block_page, cat_name
-
-    # 3) Optional extra keyword rules (similar to /api/offtask/check)
-    bad_kw = ("coolmath", "roblox", "twitch", "steam", "epicgames")
-    if any(k in domain for k in bad_kw):
-        return True, default_block_page, None
-
-    return False, None, None
-
-
-def is_blocked_domain(domain: str) -> bool:
-    """
-    Lightweight helper used by both DNS and HTTP logic.
-    """
-    blocked, _, _ = match_block_category(domain)
-    return blocked
 
 
 # =========================
@@ -702,5 +598,1276 @@ def api_class_set():
         set_setting("chat_enabled", body["chat_enabled"])
         d["settings"]["chat_enabled"] = bool(body["chat_enabled"])
 
+    if "active" in body:
+        cls["active"] = bool(body["active"])
+    if "passcode" in body and body["passcode"]:
+        d["settings"]["passcode"] = body["passcode"]
+
+    d["classes"]["period1"] = cls
+
+    if bool(cls.get("active", True)) and not prev_active:
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Class session is active",
+            "message": "Please join and stay until dismissed."
+        })
+
+    # IMPORTANT: force all extensions to re-fetch policy for new rules
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
+
+    save_data(d)
+    log_action({"event": "class_set", "active": cls.get("active", True)})
+    return jsonify({"ok": True, "class": cls, "settings": d["settings"]})
+
+@app.route("/api/class/toggle", methods=["POST"])
+def api_class_toggle():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    d = ensure_keys(load_data())
+    b = request.json or {}
+    cid = b.get("class_id", "period1")
+    key = b.get("key")
+    val = bool(b.get("value"))
+
+    if cid in d["classes"] and key in ("focus_mode", "paused"):
+        d["classes"][cid][key] = val
+        save_data(d)
+        log_action({"event": "class_toggle", "key": key, "value": val})
+        return jsonify({"ok": True, "class": d["classes"][cid]})
+
+    return jsonify({"ok": False, "error": "invalid"}), 400
 
 
+# =========================
+# Commands
+# =========================
+@app.route("/api/command", methods=["POST"])
+def api_command():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    b = request.json or {}
+    target = b.get("student") or "*"
+    cmd = b.get("command")
+    if not cmd or "type" not in cmd:
+        return jsonify({"ok": False, "error": "invalid"}), 400
+    d.setdefault("pending_commands", {}).setdefault(target, []).append(cmd)
+    save_data(d)
+    log_action({"event": "command", "target": target, "type": cmd.get("type")})
+    return jsonify({"ok": True})
+
+@app.route("/api/commands/<student>", methods=["GET", "POST"])
+def api_commands(student):
+    d = ensure_keys(load_data())
+
+    if request.method == "GET":
+        cmds = d["pending_commands"].get(student, []) + d["pending_commands"].get("*", [])
+        d["pending_commands"][student] = []
+        d["pending_commands"]["*"] = []
+        save_data(d)
+        return jsonify({"commands": cmds})
+
+    # POST (push from teacher)
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    b = request.json or {}
+    if not b.get("type"):
+        return jsonify({"ok": False, "error": "missing type"}), 400
+
+    d["pending_commands"].setdefault(student, []).append(b)
+    save_data(d)
+    log_action({"event": "command_sent", "to": student, "cmd": b.get("type")})
+    return jsonify({"ok": True})
+
+
+# =========================
+# Off-task Check (simple) – FIXED
+# =========================
+@app.route("/api/offtask/check", methods=["POST"])
+def api_offtask_check():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    url = (b.get("url") or "")
+    if not student or not url:
+        return jsonify({"ok": False}), 400
+
+    d = ensure_keys(load_data())
+
+    # Build allowed domains from persisted policy + teacher allow list
+    scene_allowed = set()
+
+    policy_allow = (d.get("policy", {}).get("allowlist") or [])
+    teacher_allow = get_setting("teacher_allow", []) or []
+    merged_allow = list(policy_allow) + list(teacher_allow)
+
+    for patt in merged_allow:
+        s = str(patt or "").strip()
+        if not s:
+            continue
+
+        # Chrome-style pattern: *://*.example.com/*
+        m = re.match(r"\*\:\/\/\*\.(.+?)\/\*", s)
+        if m:
+            scene_allowed.add(m.group(1).lower())
+            continue
+
+        # Fallbacks for raw domains or URLs
+        s = re.sub(r"^\*\:\/\/", "", s)            # remove leading *://
+        s = re.sub(r"^https?:\/\/", "", s)         # remove protocol
+        s = s.strip("/*")                          # trim wildcards and slashes
+        if s:
+            scene_allowed.add(s.lower())
+
+    host = ""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        pass
+
+    # NEW: default to on_task when no allowlist is configured
+    on_task = True
+
+    # If we *do* have an allowlist, then enforce it
+    if scene_allowed and host:
+        for dom in scene_allowed:
+            if host == dom or host.endswith("." + dom) or host.endswith(dom):
+                on_task = True
+                break
+        else:
+            on_task = False
+
+    # Hard-block known bad keywords
+    bad_kw = ("coolmath", "roblox", "twitch", "steam", "epicgames")
+    if any(k in url.lower() for k in bad_kw):
+        on_task = False
+
+    v = {"student": student, "url": url, "ts": int(time.time()), "on_task": bool(on_task)}
+    d.setdefault("offtask_events", []).append(v)
+    d["offtask_events"] = d["offtask_events"][-2000:]
+    save_data(d)
+
+    try:
+        # If using socketio, you could emit here; safely ignore if not present
+        from flask_socketio import SocketIO  # type: ignore
+        socketio = SocketIO(message_queue=None)
+        socketio.emit("offtask", v, broadcast=True)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "on_task": bool(on_task)})
+
+
+# =========================
+# Presence / Heartbeat
+# =========================
+@app.route("/api/heartbeat", methods=["POST"])
+def api_heartbeat():
+    """Student heartbeat – updates presence, logs timeline, screenshots, and returns extension state."""
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    display_name = b.get("student_name", "")
+
+    # Global kill switch (safe if file type changed)
+    data_global = ensure_keys(load_data())
+    extension_enabled_global = bool(data_global.get("extension_enabled", True))
+
+    # Hard-disable guest/anonymous identities – do NOT log or persist anything
+    if _is_guest_identity(student, display_name):
+        return jsonify({
+            "ok": True,
+            "server_time": int(time.time()),
+            "extension_enabled": False  # completely disabled for guests
+        })
+
+    d = ensure_keys(load_data())
+    d.setdefault("presence", {})
+
+    if student:
+        pres = d["presence"].setdefault(student, {})
+        pres["last_seen"] = int(time.time())
+        pres["student_name"] = display_name
+        pres["tab"] = b.get("tab", {}) or {}
+        pres["tabs"] = b.get("tabs", []) or []
+        # support both camel and snake favicon key names
+        if "favIconUrl" in pres.get("tab", {}):
+            pass
+        elif "favicon" in pres.get("tab", {}):
+            pres["tab"]["favIconUrl"] = pres["tab"].get("favicon")
+
+        pres["screenshot"] = b.get("screenshot", "") or ""
+
+        # --- Keep only screenshots for open tabs shown in modal preview ---
+        shots = pres.get("tabshots", {})
+        for k, v in (b.get("tabshots", {}) or {}).items():
+            shots[str(k)] = v
+        open_ids = {str(t.get("id")) for t in pres["tabs"] if "id" in t}
+        for k in list(shots.keys()):
+            if k not in open_ids:
+                del shots[k]
+        pres["tabshots"] = shots
+        d["presence"][student] = pres
+
+        # ---------- Timeline & Screenshot history ----------
+        try:
+            timeline = d.setdefault("history", {}).setdefault(student, [])
+            now = int(time.time())
+            cur = pres.get("tab", {}) or {}
+            url = (cur.get("url") or "").strip()
+            title = (cur.get("title") or "").strip()
+            fav = cur.get("favIconUrl")
+
+            should_add = False
+            if url:
+                if not timeline:
+                    should_add = True
+                else:
+                    last = timeline[-1]
+                    if last.get("url") != url or now - int(last.get("ts", 0)) >= 15:
+                        should_add = True
+
+            if should_add:
+                timeline.append({"ts": now, "title": title, "url": url, "favIconUrl": fav})
+                d["history"][student] = timeline[-500:]  # cap
+
+            # Screenshot history: if extension passes `shot_log: [{tabId,dataUrl,title,url}]`
+            shot_log = b.get("shot_log") or []
+            if shot_log:
+                hist = d.setdefault("screenshots", {}).setdefault(student, []
+                )
+                for s in shot_log[:10]:
+                    hist.append({
+                        "ts": now,
+                        "tabId": s.get("tabId"),
+                        "dataUrl": s.get("dataUrl"),
+                        "title": (s.get("title") or ""),
+                        "url": (s.get("url") or "")
+                    })
+                d["screenshots"][student] = hist[-200:]
+        except Exception as e:
+            print("[WARN] Heartbeat logging error:", e)
+
+    save_data(d)
+
+    return jsonify({
+        "ok": True,
+        "server_time": int(time.time()),
+        # Honor global kill switch but also keep guest lockout enforced above.
+        "extension_enabled": bool(extension_enabled_global)
+    })
+
+@app.route("/api/presence")
+def api_presence():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify(load_data().get("presence", {}))
+
+
+# =========================
+# Extension Global Toggle
+# =========================
+@app.route("/api/extension/toggle", methods=["POST"])
+def api_extension_toggle():
+    """Toggle all student extensions (remote control by teacher/admin)."""
+    user = current_user()
+    if not user or user.get("role") not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    body = request.json or {}
+    enabled = bool(body.get("enabled", True))
+
+    data = ensure_keys(load_data())
+    data["extension_enabled"] = enabled
+    save_data(data)
+
+    print(f"[INFO] Extension toggle → {'ENABLED' if enabled else 'DISABLED'} by {user.get('email')}")
+    log_action({"event": "extension_toggle", "enabled": enabled, "by": user.get("email")})
+    return jsonify({"ok": True, "extension_enabled": enabled})
+
+
+# =========================
+# Policy – with safe scene handling & snapshot
+# =========================
+@app.route("/api/policy", methods=["POST"])
+def api_policy():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    d = ensure_keys(load_data())
+    cls = d["classes"]["period1"]
+
+    # Base flags
+    focus = bool(cls.get("focus_mode", False))
+    paused = bool(cls.get("paused", False))
+
+    # Per-student overrides
+    ov = d.get("student_overrides", {}).get(student, {}) if student else {}
+    focus = bool(ov.get("focus_mode", focus))
+    paused = bool(ov.get("paused", paused))
+
+    # deliver any per-student pending commands (one-shot)
+    pending = d.get("pending_per_student", {}).get(student, []) if student else []
+    if student and student in d.get("pending_per_student", {}):
+        d["pending_per_student"].pop(student, None)
+        # do not save yet; we'll save once policy is fully computed
+
+    # Scene merge logic (no over-blocking)
+    store = _load_scenes()
+    current = store.get("current") or None
+
+    # Start with class-level lists
+    allowlist = list(cls.get("allowlist", []))
+    teacher_blocks = list(cls.get("teacher_blocks", []))
+
+    if current:
+        scene_obj = None
+        for bucket in ("allowed", "blocked"):
+            for s in store.get(bucket, []):
+                if str(s.get("id")) == str(current.get("id")):
+                    scene_obj = s
+                    break
+            if scene_obj:
+                break
+
+        if scene_obj:
+            scene_type = scene_obj.get("type")
+            scene_allow = scene_obj.get("allow") or []
+            scene_block = scene_obj.get("block") or []
+
+            if scene_type == "allowed" and scene_allow:
+                # allow-only mode (focus true) ONLY if there are actually allowed patterns
+                allowlist = list(scene_allow)
+                focus = True
+            elif scene_type == "blocked":
+                # add extra teacher block patterns
+                teacher_blocks = (teacher_blocks or []) + list(scene_block)
+
+    # ---- Persist effective policy back into data.json ----
+    cls["allowlist"] = allowlist
+    cls["teacher_blocks"] = teacher_blocks
+    d["classes"]["period1"] = cls
+
+    # Snapshot policy so other endpoints (like /api/offtask/check) can reuse it
+    d["policy"] = {
+        "allowlist": allowlist,
+        "teacher_blocks": teacher_blocks,
+        "focus_mode": bool(focus),
+        "paused": bool(paused),
+        "scene": store.get("current"),
+    }
+
+    save_data(d)
+    # ------------------------------------------------------
+
+    resp = {
+        "blocked_redirect": d.get("settings", {}).get("blocked_redirect", "https://blocked.gdistrict.org/Gschool%20block"),
+        "categories": d.get("categories", {}),
+        "focus_mode": bool(focus),
+        "paused": bool(paused),
+        "announcement": d.get("announcements", ""),
+        "class": {
+            "id": "period1",
+            "name": cls.get("name", "Period 1"),
+            "active": bool(cls.get("active", True))
+        },
+        "allowlist": allowlist,
+        "teacher_blocks": teacher_blocks,
+        "chat_enabled": d.get("settings", {}).get("chat_enabled", False),
+        "pending": pending,
+        "ts": int(time.time()),
+        "scenes": {"current": current}
+    }
+    return jsonify(resp)
+
+
+# =========================
+# Timeline & Screenshots
+# =========================
+@app.route("/api/timeline", methods=["GET"])
+def api_timeline():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    student = (request.args.get("student") or "").strip()
+    limit = max(1, min(int(request.args.get("limit", 200)), 1000))
+    since = int(request.args.get("since", 0))
+    out = []
+    if student:
+        out = [e for e in d.get("history", {}).get(student, []) if e.get("ts", 0) >= since]
+        out.sort(key=lambda x: x.get("ts", 0))
+    else:
+        for s, arr in (d.get("history", {}) or {}).items():
+            for e in arr:
+                if e.get("ts", 0) >= since:
+                    out.append(dict(e, student=s))
+        out.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return jsonify({"ok": True, "items": out[-limit:]})
+
+@app.route("/api/screenshots", methods=["GET"])
+def api_screenshots():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    student = (request.args.get("student") or "").strip()
+    limit = max(1, min(int(request.args.get("limit", 100)), 500))
+    items = []
+
+    if student:
+        items = list(d.get("screenshots", {}).get(student, []))
+        for it in items:
+            it.setdefault("student", student)
+    else:
+        for s, arr in (d.get("screenshots", {}) or {}).items():
+            for e in arr:
+                items.append(dict(e, student=s))
+        items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+
+    return jsonify({"ok": True, "items": items[-limit:]})
+
+
+# =========================
+# Alerts (Off-task)
+# =========================
+@app.route("/api/alerts", methods=["GET", "POST"])
+def api_alerts():
+    d = ensure_keys(load_data())
+    if request.method == "POST":
+        b = request.json or {}
+        u = current_user()
+        student = (b.get("student") or (u["email"] if (u and u.get("role") == "student") else "")).strip()
+        if not student:
+            return jsonify({"ok": False, "error": "student required"}), 400
+        item = {
+            "ts": int(time.time()),
+            "student": student,
+            "kind": b.get("kind", "off_task"),
+            "score": float(b.get("score") or 0.0),
+            "title": (b.get("title") or ""),
+            "url": (b.get("url") or ""),
+            "note": (b.get("note") or "")
+        }
+        d.setdefault("alerts", []).append(item)
+        d["alerts"] = d["alerts"][-500:]
+        save_data(d)
+        log_action({"event": "alert", "student": student, "kind": item["kind"], "score": item["score"]})
+        return jsonify({"ok": True})
+
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    return jsonify({"ok": True, "items": d.get("alerts", [])[-200:]})
+
+
+@app.route("/api/alerts/clear", methods=["POST"])
+def api_alerts_clear():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    d = ensure_keys(load_data())
+    if student:
+        d["alerts"] = [a for a in d.get("alerts", []) if a.get("student") != student]
+    else:
+        d["alerts"] = []
+    save_data(d)
+    return jsonify({"ok": True})
+
+
+# =========================
+# Engagement API (NEW)
+# =========================
+@app.route("/api/engagement")
+def api_engagement():
+    """
+    Simple engagement score per student over a time window.
+    Query param: window (seconds) -> default 1800, min 60, max 14400.
+    """
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    try:
+        window = int(request.args.get("window", 1800))
+    except Exception:
+        window = 1800
+    window = max(60, min(window, 14400))
+
+    now = int(time.time())
+    since = now - window
+
+    d = ensure_keys(load_data())
+    presence = d.get("presence", {}) or {}
+    history = d.get("history", {}) or {}
+    off_events = d.get("offtask_events", []) or []
+    alerts = d.get("alerts", []) or []
+
+    students = set(presence.keys())
+    for student, arr in history.items():
+        if any((e.get("ts") or 0) >= since for e in (arr or [])):
+            students.add(student)
+
+    results = []
+    for student in sorted(students):
+        if not student:
+            continue
+
+        hist = [e for e in (history.get(student) or []) if (e.get("ts") or 0) >= since]
+        total_events = len(hist)
+
+        student_off = [
+            e for e in off_events
+            if (e.get("student") == student and (e.get("ts") or 0) >= since and not bool(e.get("on_task", True)))
+        ]
+        off_count = len(student_off)
+
+        student_alerts = [a for a in alerts if (a.get("student") == student and (a.get("ts") or 0) >= since)]
+        alerts_count = len(student_alerts)
+
+        if total_events > 0:
+            ratio = off_count / float(total_events)
+            engagement = max(0.0, min(1.0, 1.0 - ratio))
+        else:
+            engagement = 1.0  # neutral if no events
+
+        risk = "low"
+        if engagement < 0.6 or off_count >= 5 or alerts_count >= 3:
+            risk = "medium"
+        if engagement < 0.4 or off_count >= 10 or alerts_count >= 5:
+            risk = "high"
+
+        pres = presence.get(student) or {}
+        tabs_open = len(pres.get("tabs") or []) if isinstance(pres.get("tabs"), list) else 0
+
+        results.append({
+            "student": student,
+            "engagement": engagement,
+            "offtask_events": off_count,
+            "alerts": alerts_count,
+            "tabs_open": tabs_open,
+            "last_seen": pres.get("last_seen") or 0,
+            "risk": risk
+        })
+
+    return jsonify({"ok": True, "window": window, "since": since, "now": now, "students": results})
+
+
+# =========================
+# Scenes API
+# =========================
+@app.route("/api/scenes", methods=["GET"])
+def api_scenes_list():
+    return jsonify(_load_scenes())
+
+@app.route("/api/scenes", methods=["POST"])
+def api_scenes_create():
+    body = request.json or {}
+    name = body.get("name")
+    s_type = body.get("type")  # "allowed" or "blocked"
+    if not name or s_type not in ("allowed", "blocked"):
+        return jsonify({"ok": False, "error": "name and valid type required"}), 400
+
+    scenes = _load_scenes()
+    new_scene = {
+        "id": str(int(time.time() * 1000)),
+        "name": name,
+        "type": s_type,
+        "allow": body.get("allow", []),
+        "block": body.get("block", []),
+        "icon": body.get("icon", "blue")
+    }
+    scenes[s_type].append(new_scene)
+    _save_scenes(scenes)
+
+    log_action({"event": "scene_create", "id": new_scene["id"], "name": name})
+    return jsonify({"ok": True, "scene": new_scene})
+
+@app.route("/api/scenes/<sid>", methods=["PUT"])
+def api_scenes_update(sid):
+    body = request.json or {}
+    scenes = _load_scenes()
+    updated = None
+    for bucket in ("allowed", "blocked"):
+        for s in scenes.get(bucket, []):
+            if s.get("id") == sid:
+                s.update(body)
+                updated = s
+                break
+    if not updated:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    _save_scenes(scenes)
+    log_action({"event": "scene_update", "id": sid})
+    return jsonify({"ok": True, "scene": updated})
+
+@app.route("/api/scenes/<sid>", methods=["DELETE"])
+def api_scenes_delete(sid):
+    scenes = _load_scenes()
+    for bucket in ("allowed", "blocked"):
+        scenes[bucket] = [s for s in scenes.get(bucket, []) if s.get("id") != sid]
+    if scenes.get("current", {}).get("id") == sid:
+        scenes["current"] = None
+    _save_scenes(scenes)
+    log_action({"event": "scene_delete", "id": sid})
+    return jsonify({"ok": True})
+
+@app.route("/api/scenes/export", methods=["GET"])
+def api_scenes_export():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    store = _load_scenes()
+    scene_id = request.args.get("id")
+    if scene_id:
+        for bucket in ("allowed", "blocked"):
+            for s in store.get(bucket, []):
+                if s.get("id") == scene_id:
+                    return jsonify({"ok": True, "scene": s})
+        return jsonify({"ok": False, "error": "not found"}), 404
+    return jsonify({"ok": True, "scenes": store})
+
+@app.route("/api/scenes/import", methods=["POST"])
+def api_scenes_import():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    store = _load_scenes()
+    if "scene" in body:
+        sc = dict(body["scene"])
+        sc["id"] = sc.get("id") or ("scene_" + str(int(time.time() * 1000)))
+        if sc.get("type") == "allowed":
+            store.setdefault("allowed", []).append(sc)
+        else:
+            sc["type"] = "blocked"
+            store.setdefault("blocked", []).append(sc)
+        _save_scenes(store)
+        return jsonify({"ok": True, "id": sc["id"]})
+    elif "scenes" in body:
+        _save_scenes(body["scenes"])
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "invalid payload"}), 400
+
+@app.route("/api/scenes/apply", methods=["POST"])
+def api_scenes_apply():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    body = request.json or {}
+    sid = body.get("id") or body.get("scene_id")
+    disable = bool(body.get("disable", False))
+
+    store = _load_scenes()
+
+    if disable:
+        store["current"] = None
+        _save_scenes(store)
+        log_action({"event": "scene_disabled"})
+
+        # Policy changed → force refresh
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "policy_refresh"})
+        save_data(d)
+
+        return jsonify({"ok": True, "current": None})
+
+    if not sid:
+        return jsonify({"ok": False, "error": "scene_id required"}), 400
+
+    found = None
+    for bucket in ("allowed", "blocked"):
+        for s in store.get(bucket, []):
+            if str(s.get("id")) == str(sid):
+                found = {"id": s["id"], "name": s.get("name"), "type": s.get("type")}
+                break
+        if found:
+            break
+
+    if not found:
+        return jsonify({"ok": False, "error": "scene not found"}), 404
+
+    store["current"] = found
+    _save_scenes(store)
+    log_action({"event": "scene_applied", "scene": found})
+
+    # Push a refresh command to all students
+    d = ensure_keys(load_data())
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "policy_refresh"})
+    save_data(d)
+    return jsonify({"ok": True, "current": found})
+
+@app.route("/api/scenes/clear", methods=["POST"])
+def api_scenes_clear():
+    scenes = _load_scenes()
+    scenes["current"] = None
+    _save_scenes(scenes)
+    log_action({"event": "scene_clear"})
+
+    d = ensure_keys(load_data())
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "policy_refresh"})
+    save_data(d)
+
+    return jsonify({"ok": True})
+
+
+# =========================
+# Direct Messages
+# =========================
+@app.route("/api/dm/send", methods=["POST"])
+def api_dm_send():
+    body = request.json or {}
+    u = current_user()
+
+    if not u:
+        if body.get("from") == "student" and body.get("student"):
+            u = {"email": body["student"], "role": "student"}
+
+    if not u:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+
+    if u["role"] == "student":
+        room = f"dm:{u['email']}"
+        role = "student"; user_id = u["email"]
+    elif u["role"] == "teacher":
+        student = body.get("student")
+        if not student:
+            return jsonify({"ok": False, "error": "no student"}), 400
+        room = f"dm:{student}"
+        role = "teacher"; user_id = u["email"]
+    else:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    con = db(); cur = con.cursor()
+    cur.execute("INSERT INTO chat_messages(room,user_id,role,text,ts) VALUES(?,?,?,?,?)",
+                (room, user_id, role, text, int(time.time())))
+    con.commit(); con.close()
+    return jsonify({"ok": True})
+
+@app.route("/api/dm/me", methods=["GET"])
+def api_dm_me():
+    u = current_user()
+    student = None
+
+    if u and u["role"] == "student":
+        student = u["email"]
+    if not student:
+        student = request.args.get("student")
+
+    if not student:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    con = db(); cur = con.cursor()
+    cur.execute("SELECT user_id,role,text,ts FROM chat_messages WHERE room=? ORDER BY ts ASC", (f"dm:{student}",))
+    msgs = [{"from": r[1], "user": r[0], "text": r[2], "ts": r[3]} for r in cur.fetchall()]
+    con.close()
+    return jsonify(msgs)
+
+@app.route("/api/dm/<student>", methods=["GET"])
+def api_dm_get(student):
+    u = current_user()
+    if not u:
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    msgs = d.get("dm", {}).get(student, [])[-200:]
+    return jsonify({"messages": msgs})
+
+@app.route("/api/dm/unread", methods=["GET"]]
+def api_dm_unread():
+    d = ensure_keys(load_data())
+    out = {}
+    for student, msgs in d.get("dm", {}).items():
+        out[student] = sum(1 for m in msgs if m.get("from") == "student" and m.get("unread", True))
+    return jsonify(out)
+
+@app.route("/api/dm/mark_read", methods=["POST"])
+def api_dm_mark_read():
+    body = request.json or {}
+    student = body.get("student")
+    d = ensure_keys(load_data())
+    if student in d.get("dm", {}):
+        for m in d["dm"][student]:
+            if m.get("from") == "student":
+                m["unread"] = False
+        save_data(d)
+    return jsonify({"ok": True})
+
+
+# =========================
+# Attention Check
+# =========================
+@app.route("/api/attention_check", methods=["POST"])
+def api_attention_check():
+    body = request.json or {}
+    title = body.get("title", "Are you paying attention?")
+    timeout = int(body.get("timeout", 30))
+
+    d = ensure_keys(load_data())
+    d["attention_check"] = {"title": title, "timeout": timeout, "ts": int(time.time()), "responses": {}}
+
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "attention_check",
+        "title": title,
+        "timeout": timeout
+    })
+    save_data(d)
+    log_action({"event": "attention_check_start", "title": title})
+    return jsonify({"ok": True})
+
+@app.route("/api/attention_response", methods=["POST"])
+def api_attention_response():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    response = b.get("response", "")
+    d = ensure_keys(load_data())
+    check = d.get("attention_check")
+    if not check:
+        return jsonify({"ok": False, "error": "no active check"}), 400
+    check["responses"][student] = {"response": response, "ts": int(time.time())}
+    save_data(d)
+    log_action({"event": "attention_response", "student": student, "response": response})
+    return jsonify({"ok": True})
+
+@app.route("/api/attention_results")
+def api_attention_results():
+    d = ensure_keys(load_data())
+    return jsonify(d.get("attention_check", {}))
+
+
+# =========================
+# Per-Student Controls
+# =========================
+@app.route("/api/student/set", methods=["POST"])
+def api_student_set():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    if not student:
+        return jsonify({"ok": False, "error": "student required"}), 400
+    d = ensure_keys(load_data())
+    ov = d.setdefault("student_overrides", {}).setdefault(student, {})
+    if "focus_mode" in b:
+        ov["focus_mode"] = bool(b.get("focus_mode"))
+    if "paused" in b:
+        ov["paused"] = bool(b.get("paused"))
+    save_data(d)
+    log_action({"event": "student_set", "student": student, "focus_mode": ov.get("focus_mode"), "paused": ov.get("paused")})
+    return jsonify({"ok": True, "overrides": ov})
+
+@app.route("/api/open_tabs", methods=["POST"])
+def api_open_tabs_alias():
+    b = request.json or {}
+    urls = b.get("urls") or []
+    student = (b.get("student") or "").strip()
+    if not urls:
+        return jsonify({"ok": False, "error": "urls required"}), 400
+
+    d = load_data()
+    d.setdefault("pending_commands", {})
+    if student:
+        pend = d.setdefault("pending_per_student", {})
+        arr = pend.setdefault(student, [])
+        arr.append({"type": "open_tabs", "urls": urls, "ts": int(time.time())})
+        arr[:] = arr[-50:]
+        log_action({"event": "student_tabs", "student": student, "type": "open_tabs", "count": len(urls)})
+    else:
+        d["pending_commands"].setdefault("*", []).append({"type": "open_tabs", "urls": urls, "ts": int(time.time())})
+        log_action({"event": "class_tabs", "target": "*", "type": "open_tabs", "count": len(urls)})
+    save_data(d)
+    return jsonify({"ok": True})
+
+@app.route("/api/student/tabs_action", methods=["POST"])
+def api_student_tabs_action():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    action = (b.get("action") or "").strip()  # 'restore_tabs' | 'close_tabs'
+    if not student or action not in ("restore_tabs", "close_tabs"):
+        return jsonify({"ok": False, "error": "student and valid action required"}), 400
+    d = ensure_keys(load_data())
+    pend = d.setdefault("pending_per_student", {})
+    arr = pend.setdefault(student, [])
+    arr.append({"type": action, "ts": int(time.time())})
+    arr[:] = arr[-50:]
+    save_data(d)
+    log_action({"event": "student_tabs", "student": student, "type": action})
+    return jsonify({"ok": True})
+
+
+# =========================
+# Class Chat
+# =========================
+@app.route("/api/chat/<class_id>", methods=["GET", "POST"])
+def api_chat(class_id):
+    d = ensure_keys(load_data())
+    d.setdefault("chat", {}).setdefault(class_id, [])
+    if request.method == "POST":
+        b = request.json or {}
+        txt = (b.get("text") or "")[:500]
+        sender = b.get("from") or "student"
+        if not txt:
+            return jsonify({"ok": False, "error": "empty"}), 400
+        d["chat"][class_id].append({"from": sender, "text": txt, "ts": int(time.time())})
+        d["chat"][class_id] = d["chat"][class_id][-200:]
+        save_data(d)
+        return jsonify({"ok": True})
+    return jsonify({"enabled": d.get("settings", {}).get("chat_enabled", False), "messages": d["chat"][class_id][-100:]})
+
+
+# =========================
+# Raise Hand
+# =========================
+@app.route("/api/raise_hand", methods=["POST"])
+def api_raise_hand():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    note = (b.get("note") or "").strip()
+    d = ensure_keys(load_data())
+    d.setdefault("raises", [])
+    d["raises"].append({"student": student, "note": note, "ts": int(time.time())})
+    d["raises"] = d["raises"][-200:]
+    save_data(d)
+    log_action({"event": "raise_hand", "student": student})
+    return jsonify({"ok": True})
+
+@app.route("/api/raise_hand", methods=["GET"])
+def get_hands():
+    d = ensure_keys(load_data())
+    return jsonify({"hands": d.get("raises", [])})
+
+@app.route("/api/raise_hand/clear", methods=["POST"])
+def clear_hand():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    d = ensure_keys(load_data())
+    lst = d.get("raises", [])
+    if student:
+        lst = [r for r in lst if r.get("student") != student]
+    else:
+        lst = []
+    d["raises"] = lst
+    save_data(d)
+    return jsonify({"ok": True, "remaining": len(lst)})
+
+
+# =========================
+# YouTube / Doodle settings
+# =========================
+@app.route("/api/youtube_rules", methods=["GET", "POST"])
+def api_youtube_rules():
+    if request.method == "POST":
+        body = request.json or {}
+        set_setting("yt_block_keywords", body.get("block_keywords", []))
+        set_setting("yt_block_channels", body.get("block_channels", []))
+        set_setting("yt_allow", body.get("allow", []))
+        set_setting("yt_allow_mode", bool(body.get("allow_mode", False)))
+
+        # Broadcast an update command to all present students
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "update_youtube_rules",
+            "rules": {
+                "block_keywords": body.get("block_keywords", []),
+                "block_channels": body.get("block_channels", []),
+                "allow": body.get("allow", []),
+                "allow_mode": bool(body.get("allow_mode", False))
+            }
+        })
+        save_data(d)
+
+        log_action({"event": "youtube_rules_update"})
+        return jsonify({"ok": True})
+
+    rules = {
+        "block_keywords": get_setting("yt_block_keywords", []),
+        "block_channels": get_setting("yt_block_channels", []),
+        "allow": get_setting("yt_allow", []),
+        "allow_mode": bool(get_setting("yt_allow_mode", False)),
+    }
+    return jsonify(rules)
+
+@app.route("/api/doodle_block", methods=["GET", "POST"])
+def api_doodle_block():
+    if request.method == "POST":
+        body = request.json or {}
+        enabled = bool(body.get("enabled", False))
+        set_setting("block_google_doodles", enabled)
+        log_action({"event": "doodle_block_update", "enabled": enabled})
+        return jsonify({"ok": True, "enabled": enabled})
+    return jsonify({"enabled": bool(get_setting("block_google_doodles", False))})
+
+
+# =========================
+# Global Overrides (Admin)
+# =========================
+@app.route("/api/overrides", methods=["GET"])
+def api_get_overrides():
+    d = ensure_keys(load_data())
+    return jsonify({
+        "allowlist": d.get("allowlist", []),
+        "teacher_blocks": d.get("teacher_blocks", [])
+    })
+
+@app.route("/api/overrides", methods=["POST"])
+def api_save_overrides():
+    u = current_user()
+    if not u or u["role"] != "admin":
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    b = request.json or {}
+    d["allowlist"] = b.get("allowlist", [])
+    d["teacher_blocks"] = b.get("teacher_blocks", [])
+
+    # Policy changed → force refresh for all students
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "policy_refresh"
+    })
+
+    save_data(d)
+    log_action({"event": "overrides_save"})
+    return jsonify({"ok": True})
+
+
+# =========================
+# Poll
+# =========================
+@app.route("/api/poll", methods=["POST"])
+def api_poll():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    q = (body.get("question") or "").strip()
+    opts = [o.strip() for o in (body.get("options") or []) if o and o.strip()]
+    if not q or not opts:
+        return jsonify({"ok": False, "error": "question and options required"}), 400
+    poll_id = "poll_" + str(int(time.time() * 1000))
+    d = ensure_keys(load_data())
+    d.setdefault("polls", {})[poll_id] = {"question": q, "options": opts, "responses": []}
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "poll", "id": poll_id, "question": q, "options": opts
+    })
+    save_data(d)
+    log_action({"event": "poll_create", "poll_id": poll_id})
+    return jsonify({"ok": True, "poll_id": poll_id})
+
+@app.route("/api/poll_response", methods=["POST"])
+def api_poll_response():
+    b = request.json or {}
+    poll_id = b.get("poll_id")
+    answer = b.get("answer")
+    student = (b.get("student") or "").strip()
+    if not poll_id:
+        return jsonify({"ok": False, "error": "no poll id"}), 400
+    d = ensure_keys(load_data())
+    if poll_id not in d.get("polls", {}):
+        return jsonify({"ok": False, "error": "unknown poll"}), 404
+    d["polls"][poll_id].setdefault("responses", []).append({
+        "student": student,
+        "answer": answer,
+        "ts": int(time.time())
+    })
+    save_data(d)
+    log_action({"event": "poll_response", "poll_id": poll_id, "student": student})
+    return jsonify({"ok": True})
+
+
+# =========================
+# State (feature flags bucket)
+# =========================
+@app.route("/api/state")
+def api_state():
+    d = ensure_keys(load_data())
+    yt_rules = {
+        "block": get_setting("yt_block_keywords", []),
+        "allow": get_setting("yt_allow", []),
+        "allow_mode": bool(get_setting("yt_allow_mode", False))
+    }
+    features = d.setdefault("settings", {}).setdefault("features", {})
+    features["youtube_rules"] = yt_rules
+    features.setdefault("youtube_filter", True)
+    return jsonify(d)
+
+
+# =========================
+# Student: open tabs (explicit)
+# =========================
+@app.route("/api/student/open_tabs", methods=["POST"])
+def api_student_open_tabs():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    urls = b.get("urls") or []
+    if not student or not urls:
+        return jsonify({"ok": False, "error": "student and urls required"}), 400
+
+    d = load_data()
+    pend = d.setdefault("pending_per_student", {})
+    arr = pend.setdefault(student, [])
+    arr.append({"type": "open_tabs", "urls": urls, "ts": int(time.time())})
+    arr[:] = arr[-50:]
+    save_data(d)
+    return jsonify({"ok": True})
+
+
+# =========================
+# Exam Mode
+# =========================
+@app.route("/api/exam", methods=["POST"])
+def api_exam():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    body = request.json or {}
+    action = (body.get("action") or "").strip()
+    url = (body.get("url") or "").strip()
+    d = ensure_keys(load_data())
+    if action == "start":
+        if not url:
+            return jsonify({"ok": False, "error": "url required"}), 400
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "exam_start", "url": url})
+        d.setdefault("exam_state", {})["active"] = True
+        d["exam_state"]["url"] = url
+        save_data(d)
+        log_action({"event": "exam", "action": "start", "url": url})
+        return jsonify({"ok": True})
+    elif action == "end":
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({"type": "exam_end"})
+        d.setdefault("exam_state", {})["active"] = False
+        save_data(d)
+        log_action({"event": "exam", "action": "end"})
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "invalid action"}), 400
+
+@app.route("/api/exam_violation", methods=["POST"])
+def api_exam_violation():
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    url = (b.get("url") or "").strip()
+    reason = (b.get("reason") or "tab_violation").strip()
+    if not student:
+        return jsonify({"ok": False, "error": "student required"}), 400
+    d = ensure_keys(load_data())
+    d.setdefault("exam_violations", []).append({
+        "student": student, "url": url, "reason": reason, "ts": int(time.time())
+    })
+    d["exam_violations"] = d["exam_violations"][-500:]
+    save_data(d)
+    log_action({"event": "exam_violation", "student": student, "reason": reason})
+    return jsonify({"ok": True})
+
+@app.route("/api/exam_violations", methods=["GET"])
+def api_exam_violations():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    d = ensure_keys(load_data())
+    return jsonify({"ok": True, "items": d.get("exam_violations", [])[-200:]})
+
+@app.route("/api/exam_violations/clear", methods=["POST"])
+def api_exam_violations_clear():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    b = request.json or {}
+    student = (b.get("student") or "").strip()
+    d = ensure_keys(load_data())
+    if student:
+        d["exam_violations"] = [v for v in d.get("exam_violations", []) if v.get("student") != student]
+    else:
+        d["exam_violations"] = []
+    save_data(d)
+    log_action({"event": "exam_violations_clear", "student": student or "*"})
+    return jsonify({"ok": True})
+
+
+# =========================
+# Notify
+# =========================
+@app.route("/api/notify", methods=["POST"])
+def api_notify():
+    u = current_user()
+    if not u or u["role"] not in ("teacher", "admin"):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    b = request.json or {}
+    title = (b.get("title") or "G School")[:120]
+    message = (b.get("message") or "")[:500]
+    d = ensure_keys(load_data())
+    d.setdefault("pending_commands", {}).setdefault("*", []).append({
+        "type": "notify", "title": title, "message": message
+    })
+    save_data(d)
+    log_action({"event": "notify", "title": title})
+    return jsonify({"ok": True})
+
+
+# =========================
+# AI (optional blueprint)
+# =========================
+try:
+    import ai_routes
+    app.register_blueprint(ai_routes.ai)
+except Exception as _e:
+    print("AI routes not loaded:", _e)
+
+
+# =========================
+# Off-task alert (student)
+# =========================
+@app.route("/api/off_task", methods=["POST"])
+def api_off_task():
+    try:
+        b = request.json or {}
+        student = (b.get("student") or "").strip()
+        url = (b.get("url") or "").strip()
+        reason = (b.get("reason") or "blocked_visit")
+        log_action({"event": "off_task", "student": student, "url": url, "reason": reason, "ts": int(time.time())})
+        d = ensure_keys(load_data())
+        d.setdefault("pending_commands", {}).setdefault("*", []).append({
+            "type": "notify",
+            "title": "Off-task detected",
+            "message": f"{student or 'Student'} visited a blocked page."
+        })
+        save_data(d)
+        return jsonify({"ok": True})
+    except Exception as e:
+        try:
+            log_action({"event": "off_task_error", "error": str(e)})
+        except:
+            pass
+        return jsonify({"ok": False}), 500
+
+
+# =========================
+# Run
+# =========================
+if __name__ == "__main__":
+    # Ensure data.json exists and is sane on boot
+    save_data(ensure_keys(load_data()))
+
+    # Start DNS server in the background (binds 0.0.0.0 inside dns_server.py)
+    try:
+        start_dns_in_background()
+    except Exception as e:
+        print(f"[DNS] Failed to start DNS server: {e}")
+
+    # Start Flask HTTP server
+    app.run(host="0.0.0.0", port=5000, debug=True)
