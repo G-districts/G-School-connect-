@@ -6,7 +6,14 @@ G-Schools DNS server
 - Uses categories + teacher_blocks to decide which domains are blocked
 - For blocked domains: returns A record pointing to BLOCK_IP
 - For allowed domains: forwards query to an upstream DNS (e.g. 1.1.1.1)
-- Listens on 0.0.0.0 so any client IP can use it
+
+Notes for Render:
+- Render only exposes a single TCP port externally; UDP DNS will not be
+  publicly reachable from the internet.
+- We still start a UDP server when possible (for local / non-Render use),
+  but we:
+    * default to a non-privileged port (5353) so it doesn't crash
+    * gracefully handle bind failures so the web app still boots.
 """
 
 import os
@@ -216,11 +223,22 @@ def _guess_host_ip():
         return "127.0.0.1"
 
 
+# Detect Render-ish environment
+RENDER_ENV = bool(
+    os.environ.get("RENDER") or
+    os.environ.get("RENDER_SERVICE_ID") or
+    os.environ.get("RENDER_INSTANCE_ID")
+)
+
 UPSTREAM_DNS = os.environ.get("UPSTREAM_DNS", "1.1.1.1")          # Cloudflare by default
 UPSTREAM_PORT = int(os.environ.get("UPSTREAM_PORT", "53"))
-BLOCK_IP = os.environ.get("BLOCK_IP", _guess_host_ip())           # IP for blocked domains
-DNS_HOST = os.environ.get("DNS_HOST", "0.0.0.0")                  # Listen address
-DNS_PORT = int(os.environ.get("DNS_PORT", "53"))                  # Listen port
+
+# IP for blocked domains; default to container's primary IP
+BLOCK_IP = os.environ.get("BLOCK_IP", _guess_host_ip())
+
+# On Render you MUST use a non-privileged port (>= 1024); default 5353 instead of 53
+DNS_HOST = os.environ.get("DNS_HOST", "0.0.0.0")
+DNS_PORT = int(os.environ.get("DNS_PORT", "5353"))
 
 
 class DNSUDPHandler(socketserver.BaseRequestHandler):
@@ -276,7 +294,10 @@ class DNSUDPHandler(socketserver.BaseRequestHandler):
         except Exception as e:
             print(f"[DNS] Upstream resolution failed for {domain}: {e}")
             # Fallback: SERVFAIL
-            reply = DNSRecord(DNSHeader(id=request.header.id, qr=1, ra=1, rcode=RCODE.SERVFAIL), q=request.q)
+            reply = DNSRecord(
+                DNSHeader(id=request.header.id, qr=1, ra=1, rcode=RCODE.SERVFAIL),
+                q=request.q
+            )
             sock.sendto(reply.pack(), self.client_address)
 
 
@@ -291,8 +312,26 @@ def run_dns_server(host: str = None, port: int = None):
     host="0.0.0.0" means it will accept queries from ANY client IP.
     """
     host = host or DNS_HOST
-    port = port or DNS_PORT
-    server = ThreadedUDPServer((host, port), DNSUDPHandler)
+    port = int(port or DNS_PORT)
+
+    # On Render we can't expose UDP externally; this is mostly a best-effort
+    # so local environments still work. If the bind fails, we simply log.
+    try:
+        server = ThreadedUDPServer((host, port), DNSUDPHandler)
+    except PermissionError as e:
+        print(f"[DNS] Permission denied binding UDP {host}:{port}: {e}")
+        print("[DNS] Hint: Use DNS_PORT >= 1024 (e.g. 5353) on platforms like Render.")
+        return
+    except OSError as e:
+        print(f"[DNS] Failed to bind UDP {host}:{port}: {e}")
+        if RENDER_ENV:
+            print("[DNS] This is expected on Render; continuing without DNS.")
+        return
+
+    if RENDER_ENV:
+        print(f"[DNS] Detected Render environment. UDP DNS will not be publicly "
+              f"reachable, but server is running on {host}:{port} inside the container.")
+
     print(f"[DNS] G-Schools DNS server listening on {host}:{port}, BLOCK_IP={BLOCK_IP}")
     try:
         server.serve_forever()
@@ -317,7 +356,7 @@ def start_dns_in_background(host: str = None, port: int = None):
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    print(f"[DNS] Background DNS thread started on {host}:{port}")
+    print(f"[DNS] Background DNS thread requested on {host}:{port}")
     return t
 
 
