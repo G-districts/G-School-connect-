@@ -1065,7 +1065,6 @@ def api_alerts():
         return jsonify({"ok": False, "error": "forbidden"}), 403
     return jsonify({"ok": True, "items": d.get("alerts", [])[-200:]})
 
-
 @app.route("/api/alerts/clear", methods=["POST"])
 def api_alerts_clear():
     u = current_user()
@@ -1383,7 +1382,7 @@ def api_dm_get(student):
     msgs = d.get("dm", {}).get(student, [])[-200:]
     return jsonify({"messages": msgs})
 
-@app.route("/api/dm/unread", methods=["GET"]]
+@app.route("/api/dm/unread", methods=["GET"])
 def api_dm_unread():
     d = ensure_keys(load_data())
     out = {}
