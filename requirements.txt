@@ -8,3 +8,4 @@ tldextract==5.1.2
 sqlite-utils==3.36
 python-dotenv==1.0.1
 gunicorn==23.0.0
+dnslib
