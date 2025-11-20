@@ -9,9 +9,6 @@ from urllib.parse import urlparse
 from datetime import datetime
 from collections import defaultdict
 
-# NEW: use external dns_server.py
-from dns_server import start_dns_in_background
-
 # ---------------------------
 # Flask App Initialization
 # ---------------------------
@@ -839,8 +836,7 @@ def api_heartbeat():
             # Screenshot history: if extension passes `shot_log: [{tabId,dataUrl,title,url}]`
             shot_log = b.get("shot_log") or []
             if shot_log:
-                hist = d.setdefault("screenshots", {}).setdefault(student, []
-                )
+                hist = d.setdefault("screenshots", {}).setdefault(student, [])
                 for s in shot_log[:10]:
                     hist.append({
                         "ts": now,
@@ -1064,6 +1060,7 @@ def api_alerts():
     if not u or u["role"] not in ("teacher", "admin"):
         return jsonify({"ok": False, "error": "forbidden"}), 403
     return jsonify({"ok": True, "items": d.get("alerts", [])[-200:]})
+
 
 @app.route("/api/alerts/clear", methods=["POST"])
 def api_alerts_clear():
@@ -1861,12 +1858,4 @@ def api_off_task():
 if __name__ == "__main__":
     # Ensure data.json exists and is sane on boot
     save_data(ensure_keys(load_data()))
-
-    # Start DNS server in the background (binds 0.0.0.0 inside dns_server.py)
-    try:
-        start_dns_in_background()
-    except Exception as e:
-        print(f"[DNS] Failed to start DNS server: {e}")
-
-    # Start Flask HTTP server
     app.run(host="0.0.0.0", port=5000, debug=True)
